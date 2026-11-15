@@ -1,0 +1,55 @@
+{
+  "top": "operacion",
+  "hijos": [
+    {
+      "top": "r"
+    },
+    {
+      "top": "expr",
+      "hijos": [
+        {
+          "top": "a"
+        },
+        {
+          "top": "+"
+        },
+        {
+          "top": "expr",
+          "hijos": [
+            {
+              "top": "termino",
+              "hijos": [
+                {
+                  "top": "b"
+                },
+                {
+                  "top": "*"
+                },
+                {
+                  "top": "c"
+                }
+              ]
+            },
+            {
+              "top": "-"
+            },
+            {
+              "top": "termino",
+              "hijos": [
+                {
+                  "top": "d"
+                },
+                {
+                  "top": "/"
+                },
+                {
+                  "top": "e"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

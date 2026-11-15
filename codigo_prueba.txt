@@ -1,0 +1,21 @@
+Begin
+Ent edad , anios ;
+Ent x , y ;
+Dec promedio ;
+Ban activo ;
+Sim nombre , ciudad ;
+Sen mensaje , saludo ;
+edad = 21 ;
+anios = 5 ;
+x = 10 ;
+y = 20 ;
+promedio = x + y / 2 * 4 - 3 ;
+activo = True ;
+nombre = " Fernanda " ;
+ciudad = " Tlaltenango " ;
+mensaje = " Hola " ;
+saludo = " Bienvenida " ;
+Entrada edad = " Escribe tu edad " ;
+Salida = " Tu edad es: " , edad ;
+Salida = nombre + " vive en " + ciudad ;
+End
