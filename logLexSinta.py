@@ -18,7 +18,8 @@ class SinLex:
         self.numero=[] # Esta es la q uso para guarda los tokes numeros
         self.linComp=[]
         self.tipoVar=[] # Agg para semantico tipo Dato
-        self.varTipo= [] # Agg semantico variable 
+        self.varTipo= [] # Agg semantico variable
+        self.linVar= [] # linea de cada variable declarada
         with open(archivo, "r", encoding="utf-8") as f:
             self.lineas = f.readlines()
 
@@ -115,7 +116,7 @@ class SinLex:
                         ban = self.variables(self.token)
                         if ban == 1:
                             self.tipo="Identificador"
-                    if ban == 0:
+                    if ban != 1: # si numeroDec o variables dieron 2 tambien entra, si no se quedaba sin tipo
                         token = self.token
                         encNum = 0
                         for c in token:
@@ -181,12 +182,20 @@ class SinLex:
             return 1
         elif token in self.tipoDato :
             linea = self.lineas[self.nLinea - 1]
-            variables = linea.split(maxsplit=1)[1].replace(";", "").split(",")
+            pos = linea.find('&&')
+            if pos != -1:
+                linea = linea[:pos] # quito el comentario, si no se metia como variable
+            partes = linea.split(maxsplit=1)
+            if len(partes) < 2:
+                return 1
+            variables = partes[1].split(";")[0].split(",")
 
             for variable in variables:
                 variable = variable.strip()
-                self.varTipo.append(variable)
-                self.tipoVar.append(token)
+                if variable != "":
+                    self.varTipo.append(variable)
+                    self.tipoVar.append(token)
+                    self.linVar.append(self.nLinea) # pa saber en q linea se declaro
 
             return 1
         else:
@@ -377,7 +386,16 @@ class Sinta: # Ahora si asui comienxa el sintactico esq ocupo de arriba
         self.a=[]
         self.long=len(self.tokComp)
         #print(self.ed,",",self.ind+1,",",self.a,",",self.b)
+        self.visto = set() # estados (ind, pila b) q ya se probaron
         while self.edcad==0:
+            # si ya estuve en este mismo punto con la misma pila es q ese camino no jalo,
+            # me regreso de una vez, si no se queda probando todas las combinaciones y se traba
+            if self.ed=='n':
+                estado = (self.ind, tuple(self.b))
+                if estado in self.visto:
+                    self.ed='r'
+                    continue
+                self.visto.add(estado)
             if self.ed=='n' and self.b[0]=='decVar':
                 self.b.pop(0)
                 cvars = self.cvar()
@@ -560,6 +578,10 @@ class Sinta: # Ahora si asui comienxa el sintactico esq ocupo de arriba
                         else:
                             linea = self.linComp[len(self.linComp)-1]
                             encontrado = "fin de codigo"
+                        # si falto el ; el error es de la linea de antes no de la q sigue
+                        if ';' in self.esperados and self.indEror > 0 and self.indEror < self.long:
+                            if self.linComp[self.indEror] != self.linComp[self.indEror-1]:
+                                linea = self.linComp[self.indEror-1]
                         # si se esperaba End casi siempre es q falto cerrar
                         fiend = 0
                         c = 0
@@ -575,6 +597,7 @@ class Sinta: # Ahora si asui comienxa el sintactico esq ocupo de arriba
                         else:
                            
                             openc = 0
+                            opsEsp = "" # solo los operadores q si se esperaban
                             tipoenc = 0
                             extr = []
                             c = 0
@@ -612,7 +635,16 @@ class Sinta: # Ahora si asui comienxa el sintactico esq ocupo de arriba
                               #      + " pero se esperaba " + self.b[0] + " ") 
                             
                             if openc == 1:
-                                lista.append("un operador (+, -, *, /)")
+                                ops = ['+','-','*','/']
+                                c = 0
+                                while c < len(ops):
+                                    if ops[c] in self.esperados:
+                                        if opsEsp == "":
+                                            opsEsp = ops[c]
+                                        else:
+                                            opsEsp = opsEsp + ", " + ops[c]
+                                    c = c + 1
+                                lista.append("un operador (" + opsEsp + ")")
                             if tipoenc == 1:
                                 lista.append("un tipo de dato (Ent, Dec, Ban, Sim, Sen)")
                             c = 0
@@ -669,13 +701,49 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         self.numero = sinLex.numero
         self.tokComp = sinLex.tokComp
         self.tipoVar=sinLex.tipoVar # Agg para semantico tipo Dato
-        self.varTipo= sinLex.varTipo # Agg semantico variable 
+        self.varTipo= sinLex.varTipo # Agg semantico variable
         self.pasos = []
         self.nomVarConVal = []
         self.valVarConVal = []
-        # Hay qu4 agregar listas para los tipos de varuables y hay que agregar lo de los 
-        # operadores
-        # TU en tu def recuerda poner la tabla fija JUAN
+
+    # ---------------- cositas q se usan en todos lados ----------------
+
+    def posVar(self, nomV):
+        # posicion de la variable en varTipo (la ultima si se repite), -1 si no esta
+        pos = -1
+        c = 0
+        while c < len(self.varTipo):
+            if self.varTipo[c] == nomV:
+                pos = c
+            c = c + 1
+        return pos
+
+    def esTipo(self, tk):
+        if tk == "Ent" or tk == "Dec" or tk == "Ban" or tk == "Sim" or tk == "Sen":
+            return 1
+        return 0
+
+    def esOper(self, tk):
+        if tk == "+" or tk == "-" or tk == "*" or tk == "/":
+            return 1
+        return 0
+
+    def soloLetras(self, tk):
+        if len(tk) == 0:
+            return 0
+        c = 0
+        while c < len(tk):
+            if tk[c] not in self.sinLex.let:
+                return 0
+            c = c + 1
+        return 1
+
+    def hastaPuntoComa(self):
+        # avanza self.ind hasta el ; (se queda parado en el ;)
+        while self.ind < self.long and self.tokComp[self.ind] != ";":
+            self.ind = self.ind + 1
+
+    # ---------------- revision semantica ----------------
 
     def analiSeman(self):
         self.errSeman = []
@@ -684,125 +752,94 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
 
         self.checaDuplic()
 
+        # igual q en intermedio, voy sentencia por sentencia y segun como empieza
+        # mando a su revision
         while self.ind < self.long:
             self.tokAct = self.tokComp[self.ind]
             self.linAct = self.linComp[self.ind]
 
-            if self.tokAct == "Begin" or self.tokAct == "End":
+            if self.tokAct == "Begin" or self.tokAct == "End" or self.tokAct == "&&":
                 self.ind = self.ind + 1
-                continue
-
-            if self.tokAct == "&&":
+            elif self.esTipo(self.tokAct) == 1:
+                # las declaraciones ya se revisaron en checaDuplic
+                self.hastaPuntoComa()
                 self.ind = self.ind + 1
-                continue
-
-            if self.tokAct == "Ent" or self.tokAct == "Dec" or self.tokAct == "Ban" or self.tokAct == "Sim" or self.tokAct == "Sen":
-                # 
-                while self.tokComp[self.ind] != ";":
-                    self.ind = self.ind + 1
-                self.ind = self.ind + 1
-                continue
-
-            if self.tokAct == "Entrada":
-                self.ind = self.ind + 1
-                self.nomV = self.tokComp[self.ind]
-                self.decVarBus(self.nomV)   # solo revisa que la variable exista
-                # lo de las comillas se ignora, no hay ejecución, no se valida tipo
-                while self.ind < self.long and self.tokComp[self.ind] != ";":
-                    self.ind = self.ind + 1
-                self.ind = self.ind + 1
-                continue
-
-            if self.tokAct == "Salida":
-                self.ind = self.ind + 1
-                if self.tokComp[self.ind] == "=":
-                    self.ind = self.ind + 1
-                if self.tokComp[self.ind] == '"':
-                    self.ind = self.ind + 2
-                if self.ind < self.long and self.tokComp[self.ind] == ",":
-                    self.ind = self.ind + 1
-                    self.decVarBus(self.tokComp[self.ind])
-                    self.ind = self.ind + 1
-                elif self.ind < self.long and self.tokComp[self.ind] == "+":
-                    inicio = self.ind
-                    while self.ind < self.long and self.tokComp[self.ind] != ";":
-                        self.ind = self.ind + 1
-                    self.checaVarsConcat(self.tokComp[inicio:self.ind])
-                while self.ind < self.long and self.tokComp[self.ind] != ";":
-                    self.ind = self.ind + 1
-                self.ind = self.ind + 1
-                continue
-
-            self.esVar = 0
-            c = 0
-            while c < len(self.varTipo):
-                if self.varTipo[c] == self.tokAct:
-                    self.esVar = 1
-                c = c + 1
-
-            if self.esVar == 1:
-                self.nomV = self.tokAct
-                self.pos = 0
-                c = 0
-                while c < len(self.varTipo):
-                    if self.varTipo[c] == self.nomV:
-                        self.pos = c
-                    c = c + 1
-                self.tipoDest = self.tipoVar[self.pos]
-                self.ind = self.ind + 1
-                if self.tokComp[self.ind] == "=":
-                    self.ind = self.ind + 1
-                self.inicio = self.ind
-                while self.tokComp[self.ind] != ";":
-                    self.ind = self.ind + 1
-                self.der = self.tokComp[self.inicio:self.ind]
-                self.revisaAsig(self.nomV, self.tipoDest, self.der)
-                self.guardaValorSiSeSabe(self.nomV, self.der)
-                self.ind = self.ind + 1
-                continue
-
-            self.pareceVar = 1
-            if len(self.tokAct) == 0:
-                self.pareceVar = 0
-            c = 0
-            while c < len(self.tokAct):
-                if self.tokAct[c] not in self.sinLex.let:
-                    self.pareceVar = 0
-                c = c + 1
-
-            if self.pareceVar == 1:
+            elif self.tokAct == "Entrada":
+                self.revisaEntrada()
+            elif self.tokAct == "Salida":
+                self.revisaSalida()
+            elif self.posVar(self.tokAct) != -1:
+                self.revisaVar()
+            elif self.soloLetras(self.tokAct) == 1:
                 self.errSeman.append("la variable " + self.tokAct + " no fue declarada, linea " + str(self.linAct))
-                while self.ind < self.long and self.tokComp[self.ind] != ";":
-                    self.ind = self.ind + 1
+                self.hastaPuntoComa()
                 self.ind = self.ind + 1
-                continue
-
-            self.ind = self.ind + 1
+            else:
+                self.ind = self.ind + 1
 
         return self.errSeman
 
+    def revisaEntrada(self):
+        # Entrada x = "..." ; solo reviso q x exista, lo de las comillas no se valida
+        self.ind = self.ind + 1
+        if self.ind < self.long:
+            self.nomV = self.tokComp[self.ind]
+            self.decVarBus(self.nomV)
+        self.hastaPuntoComa()
+        self.ind = self.ind + 1
+
+    def revisaSalida(self):
+        # Salida = "..." ;   Salida = "..." , x ;   Salida = "..." + x + ... ;
+        self.ind = self.ind + 1
+        if self.ind < self.long and self.tokComp[self.ind] == "=":
+            self.ind = self.ind + 1
+        if self.ind < self.long and self.tokComp[self.ind] == '"':
+            self.ind = self.ind + 2
+        if self.ind < self.long and self.tokComp[self.ind] == ",":
+            self.ind = self.ind + 1
+            if self.ind < self.long:
+                self.decVarBus(self.tokComp[self.ind])
+            self.ind = self.ind + 1
+        elif self.ind < self.long and self.tokComp[self.ind] == "+":
+            inicio = self.ind
+            self.hastaPuntoComa()
+            self.checaVarsConcat(self.tokComp[inicio:self.ind])
+        self.hastaPuntoComa()
+        self.ind = self.ind + 1
+
+    def revisaVar(self):
+        # x = lo q sea ; saco lo de la derecha y lo reviso
+        self.nomV = self.tokAct
+        self.pos = self.posVar(self.nomV)
+        self.tipoDest = self.tipoVar[self.pos]
+        self.ind = self.ind + 1
+        if self.ind < self.long and self.tokComp[self.ind] == "=":
+            self.ind = self.ind + 1
+        self.inicio = self.ind
+        self.hastaPuntoComa()
+        self.der = self.tokComp[self.inicio:self.ind]
+        self.revisaAsig(self.nomV, self.tipoDest, self.der)
+        self.guardaValorSiSeSabe(self.nomV, self.der)
+        self.ind = self.ind + 1
+
     def guardaValorSiSeSabe(self, nomV, der):
+        # solo me importa saber si una var vale 0 pa lo de dividir entre cero
         if len(der) != 1:
             return
-        tok = der[0]
-        if self.esCero(tok) == 1:
-            yaEsta = -1
-            c = 0
-            while c < len(self.nomVarConVal):
-                if self.nomVarConVal[c] == nomV:
-                    yaEsta = c
-                c = c + 1
+        yaEsta = -1
+        c = 0
+        while c < len(self.nomVarConVal):
+            if self.nomVarConVal[c] == nomV:
+                yaEsta = c
+            c = c + 1
+        if self.esCero(der[0]) == 1:
             if yaEsta != -1:
                 self.valVarConVal[yaEsta] = 0
             else:
                 self.nomVarConVal.append(nomV)
                 self.valVarConVal.append(0)
-        else:
-            c = 0
-            while c < len(self.nomVarConVal):
-                if self.nomVarConVal[c] == nomV:
-                    self.valVarConVal[c] = -999
-                c = c + 1
+        elif yaEsta != -1:
+            self.valVarConVal[yaEsta] = -999 # ya no vale 0
 
     def valorVarEsCero(self, nomV):
         c = 0
@@ -817,55 +854,30 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         c = 0
         while c < len(self.varTipo):
             nomV = self.varTipo[c]
-            rep = 0
-            d = 0
-            while d < len(self.yaVistas):
-                if self.yaVistas[d] == nomV:
-                    rep = 1
-                d = d + 1
-            if rep == 1:
-                self.linDup = self.buscaLineaDup(nomV, c)
+            if nomV in self.yaVistas:
+                self.linDup = self.sinLex.linVar[c]
                 self.errSeman.append("la variable " + nomV + " ya habia sido declarada antes, linea " + str(self.linDup))
             else:
                 self.yaVistas.append(nomV)
             c = c + 1
 
-    def buscaLineaDup(self, nomV, posEnVarTipo):
-        vistoTok = 0
-        i = 0
-        while i < len(self.tokComp):
-            if self.tokComp[i] == nomV:
-                vistoTok = vistoTok + 1
-                if vistoTok == posEnVarTipo + 1:
-                    return self.linComp[i]
-            i = i + 1
-        return self.linComp[len(self.linComp) - 1]
-
     def decVarBus(self, nomV):
         self.enc = 0
-        c = 0
-        while c < len(self.varTipo):
-            if self.varTipo[c] == nomV:
-                self.enc = 1
-            c = c + 1
+        if self.posVar(nomV) != -1:
+            self.enc = 1
         if self.enc == 0:
             self.errSeman.append("Error, variable " + nomV + " no declarada (linea " + str(self.linAct) + ")")
 
     def checaVarsConcat(self, lista):
         c = 0
         while c < len(lista):
-            tk = lista[c]
-            if tk != '"' and tk != '+':
-                self.decVarBus(tk)
+            if lista[c] != '"' and lista[c] != '+':
+                self.decVarBus(lista[c])
             c = c + 1
 
     def tipoTok(self, token):
-        self.pos2 = -1
-        c = 0
-        while c < len(self.varTipo):
-            if self.varTipo[c] == token:
-                self.pos2 = c
-            c = c + 1
+        # tipo de lo q venga: variable, numero o error
+        self.pos2 = self.posVar(token)
         if self.pos2 != -1:
             return self.tipoVar[self.pos2]
 
@@ -873,10 +885,11 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         self.tienePunto = 0
         c = 0
         while c < len(token):
-            car = token[c]
-            if car == '.':
+            if token[c] == '.':
+                if self.tienePunto == 1:
+                    self.esNum = 0 # dos puntos ya no es numero
                 self.tienePunto = 1
-            elif car not in self.sinLex.num:
+            elif token[c] not in self.sinLex.num:
                 self.esNum = 0
             c = c + 1
         if self.esNum == 1 and len(token) > 0:
@@ -884,13 +897,8 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
                 return "Dec"
             return "Ent"
 
-        self.esLetra = 1
-        c = 0
-        while c < len(token):
-            if token[c] not in self.sinLex.let:
-                self.esLetra = 0
-            c = c + 1
-        if self.esLetra == 1 and len(token) > 0:
+        self.esLetra = self.soloLetras(token)
+        if self.esLetra == 1:
             self.errSeman.append(token + " no fue declarada y se uso en linea " + str(self.linAct))
             return "error"
 
@@ -903,8 +911,7 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             return 0
         c = 0
         while c < len(token):
-            car = token[c]
-            if car != '0' and car != '.':
+            if token[c] != '0' and token[c] != '.':
                 return 0
             c = c + 1
         return 1
@@ -927,43 +934,39 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
 
         if len(der) == 1:
             self.tipoVal = self.tipoTok(der[0])
-            if self.tipoVal == "error":
-                return
-            self.comparaTipo(nomV, tipoDest, self.tipoVal)
+            if self.tipoVal != "error":
+                self.comparaTipo(nomV, tipoDest, self.tipoVal)
             return
 
-        # aqui ya es operacion con opSuma/opMul
+        # ya es operacion, voy alternando: operando, operador, operando...
         self.tipoAcum = ""
         self.esperaOperando = 1
         self.opAnt = ""
         c = 0
         while c < len(der):
             tk = der[c]
-            if self.esperaOperando == 1:
-                if self.opAnt == "/":
-                    if self.esCero(tk) == 1:
-                        self.errSeman.append("division entre cero en la asignacion de " + nomV + ", linea " + str(self.linAct))
-                        return
-                    if self.valorVarEsCero(tk) == 1:
-                        self.errSeman.append("division entre " + tk + " que vale 0, en la asignacion de " + nomV + ", linea " + str(self.linAct))
-                        return
+            if self.esperaOperando == 0:
+                if self.esOper(tk) == 0:
+                    self.errSeman.append("faltó operador antes de " + tk + ", linea " + str(self.linAct))
+                    return
+                self.opAnt = tk
+                self.esperaOperando = 1
+            else:
+                if self.opAnt == "/" and self.esCero(tk) == 1:
+                    self.errSeman.append("division entre cero en la asignacion de " + nomV + ", linea " + str(self.linAct))
+                    return
+                if self.opAnt == "/" and self.valorVarEsCero(tk) == 1:
+                    self.errSeman.append("division entre " + tk + " que vale 0, en la asignacion de " + nomV + ", linea " + str(self.linAct))
+                    return
                 self.tipoOp = self.tipoTok(tk)
                 if self.tipoOp == "error":
                     return
                 if self.tipoOp == "Sen" or self.tipoOp == "Ban" or self.tipoOp == "Sim":
                     self.errSeman.append(tk + " es " + self.tipoOp + ", no se puede operar, linea " + str(self.linAct))
                     return
-                if self.tipoAcum == "":
+                if self.tipoAcum == "" or self.tipoOp == "Dec":
                     self.tipoAcum = self.tipoOp
-                if self.tipoOp == "Dec":
-                    self.tipoAcum = "Dec"
                 self.esperaOperando = 0
-            else:
-                if tk != "+" and tk != "-" and tk != "*" and tk != "/":
-                    self.errSeman.append("faltó operador antes de " + tk + ", linea " + str(self.linAct))
-                    return
-                self.opAnt = tk
-                self.esperaOperando = 1
             c = c + 1
 
         if self.esperaOperando == 1:
@@ -982,213 +985,225 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             return  # Revisar que si mostar con .00 si es enteri
         self.errSeman.append("tipos no compatibles: " + nomV + " es " + tipoDest + " y se le quiso poner " + tipoVal + ", linea " + str(self.linAct))
 
+    # ---------------- arboles ----------------
+
     def arbolSeman(self):
         self.arboles = []
         self.valGuardados = {}
-        ind = 0
-        largo = len(self.tokComp)
-        while ind < largo:
-            tokAct = self.tokComp[ind]
-
-            # Para ignoarar las declaraciones, mas de una variable en una linea
-            if tokAct == "Ent" or tokAct == "Dec" or tokAct == "Ban" or tokAct == "Sim" or tokAct == "Sen":
-                while ind < largo and self.tokComp[ind] != ";":
-                    ind = ind + 1
-                ind = ind + 1
-                continue
-
-            # Salida con concatenacion: Salida = "a" + x + "b";
-            if tokAct == "Salida":
-                ind = ind + 1
-                if ind < largo and self.tokComp[ind] == "=":
-                    ind = ind + 1
-                inicio = ind
-                while ind < largo and self.tokComp[ind] != ";":
-                    ind = ind + 1
-                der = self.tokComp[inicio:ind]
-                if '"' in der and '+' in der:
-                    nodoConcat = self.armaConcat(der, inicio)
-                    nodoSal = {"top": "salida", "left": "valor", "right": nodoConcat["right"],
-                               "hijos": [{"top": "Salida"}, {"top": "="}, nodoConcat]}
-                    self.arboles.append(nodoSal)
-                ind = ind + 1
-                continue
-
-            esVarDec = 0
-            c = 0
-            while c < len(self.varTipo):
-                if self.varTipo[c] == tokAct:
-                    esVarDec = 1
-                    break
-                c = c + 1
-
-            if esVarDec == 1:
-                nomVar = tokAct
-                ind = ind + 1
-                if ind < largo and self.tokComp[ind] == "=":
-                    ind = ind + 1
-                inicio = ind
-                while ind < largo and self.tokComp[ind] != ";":
-                    ind = ind + 1
-                der = self.tokComp[inicio:ind]
-
-                nodoVar = {"top": "nomVar", "left": "valor", "right": nomVar,
-                           "hijos": [{"top": nomVar}]}
-                nodoIgual = {"top": "="}
-
-                # Asignacion con concatenacion: x = "a" + y;
-                if len(der) > 0 and '"' in der and '+' in der:
-                    nodoConcat = self.armaConcat(der, inicio)
-                    nodoDato = {"top": "datoValor", "left": "valor", "right": nodoConcat["right"],
-                                "hijos": [nodoVar, nodoIgual, nodoConcat]}
-                    self.arboles.append(nodoDato)
-
-                # Asignacion aritmetica (como ya la tenias)
-                elif len(der) > 0 and '"' not in der and der[0] != "True" and der[0] != "False":
-                    self.posDer = 0
-                    self.tokDer = der
-                    nodoExpr = self.armaExpr()
-
-                    # buscar el tipo declarado de la variable final o a la que se le asigna
-                    tipoVarDestino = "Ent"
-                    c = 0
-                    while c < len(self.varTipo):
-                        if self.varTipo[c] == nomVar:
-                            tipoVarDestino = self.tipoVar[c]
-                        c = c + 1
-
-                    valFinal = nodoExpr["valNum"]
-                    if valFinal != None and tipoVarDestino == "Ent":
-                        valFinal = round(valFinal)  # redondear solo al asginar auna var entera
-
-                    nodoOper = {"top": "operacion", "left": "valor",
-                                "right": self.formatoNum(valFinal) if valFinal != None else nodoExpr["right"],
-                                "hijos": [nodoVar, nodoIgual, nodoExpr]}
-                    self.arboles.append(nodoOper)
-
-                    if valFinal != None:
-                        self.valGuardados[nomVar] = valFinal
-
-                ind = ind + 1
-                continue
-
-            ind = ind + 1
-
+        self.valCad = {} # valores de las cadenas, pa q se arrastren en concat
+        self.ind = 0
+        self.long = len(self.tokComp)
+        while self.ind < self.long:
+            tokAct = self.tokComp[self.ind]
+            if self.esTipo(tokAct) == 1:
+                # declaraciones no llevan arbol
+                self.hastaPuntoComa()
+                self.ind = self.ind + 1
+            elif tokAct == "Entrada":
+                self.arbolEntrada()
+            elif tokAct == "Salida":
+                self.arbolSalida()
+            elif self.posVar(tokAct) != -1:
+                self.arbolAsig(tokAct)
+            else:
+                self.ind = self.ind + 1
         return self.arboles
 
-    def armaExpr(self):
-        izq = self.armaTermino()
+    def arbolEntrada(self):
+        # el valor se pide al correr, ya no se sabe cuanto vale
+        if self.ind + 1 < self.long:
+            nomEnt = self.tokComp[self.ind + 1]
+            if nomEnt in self.valGuardados:
+                self.valGuardados.pop(nomEnt)
+            if nomEnt in self.valCad:
+                self.valCad.pop(nomEnt)
+        self.hastaPuntoComa()
+        self.ind = self.ind + 1
 
-        while self.posDer < len(self.tokDer) and (self.tokDer[self.posDer] == "+" or self.tokDer[self.posDer] == "-"):
-            operador = self.tokDer[self.posDer]
-            self.posDer = self.posDer + 1
-            der = self.armaTermino()
+    def arbolSalida(self):
+        # solo se grafica si es concatenacion: Salida = "a" + x + "b" ;
+        self.ind = self.ind + 1
+        if self.ind < self.long and self.tokComp[self.ind] == "=":
+            self.ind = self.ind + 1
+        inicio = self.ind
+        self.hastaPuntoComa()
+        der = self.tokComp[inicio:self.ind]
+        if '"' in der and '+' in der:
+            nodoConcat = self.armaConcat(der, inicio)
+            self.arboles.append({"top": "salida", "left": "valor", "right": nodoConcat["right"],
+                                 "hijos": [{"top": "Salida"}, {"top": "="}, nodoConcat]})
+        self.ind = self.ind + 1
 
-            tipoRes = self.combinaTipo(izq["tipoDat"], der["tipoDat"])
+    def arbolAsig(self, nomVar):
+        self.ind = self.ind + 1
+        if self.ind < self.long and self.tokComp[self.ind] == "=":
+            self.ind = self.ind + 1
+        inicio = self.ind
+        self.hastaPuntoComa()
+        der = self.tokComp[inicio:self.ind]
+        self.ind = self.ind + 1
 
-            if izq["valNum"] != None and der["valNum"] != None:
-                if operador == "+":
-                    valRes = izq["valNum"] + der["valNum"]
-                else:
-                    valRes = izq["valNum"] - der["valNum"]
-                textoRes = self.formatoNum(valRes)
+        nodoVar = {"top": "nomVar", "left": "valor", "right": nomVar, "hijos": [{"top": nomVar}]}
+        nodoIgual = {"top": "="}
+
+        if len(der) == 0:
+            return
+        if len(der) == 2 and der[0] == '"' and der[1] == '"':
+            # cadena sola: nombre = " Fernanda " , no se grafica solo se guarda
+            self.valCad[nomVar] = self.textoCadena(inicio)
+            return
+        if '"' in der and '+' in der:
+            nodoConcat = self.armaConcat(der, inicio)
+            self.arboles.append({"top": "datoValor", "left": "valor", "right": nodoConcat["right"],
+                                 "hijos": [nodoVar, nodoIgual, nodoConcat]})
+            self.valCad[nomVar] = nodoConcat["valCad"] # ya junto, sin los +
+            return
+        if '"' in der or der[0] == "True" or der[0] == "False":
+            return
+
+        # operacion aritmetica
+        nodoExpr = self.armaExpr(der)
+        tipoVarDestino = "Ent"
+        if self.posVar(nomVar) != -1:
+            tipoVarDestino = self.tipoVar[self.posVar(nomVar)]
+
+        valFinal = nodoExpr["valNum"]
+        if valFinal != None and tipoVarDestino == "Ent":
+            valFinal = round(valFinal)  # redondear solo al asginar auna var entera
+
+        # solo grafico si hay operador, z = 21 no
+        hayOper = 0
+        c = 0
+        while c < len(der):
+            if self.esOper(der[c]) == 1:
+                hayOper = 1
+            c = c + 1
+        if hayOper == 1:
+            if valFinal != None:
+                textoFinal = self.formatoNum(valFinal)
             else:
-                valRes = None
-                textoRes = str(izq["right"]) + operador + str(der["right"])
+                textoFinal = nodoExpr["right"]
+            self.arboles.append({"top": "operacion", "left": "valor", "right": textoFinal,
+                                 "hijos": [nodoVar, nodoIgual, nodoExpr]})
 
-            izq = {"top": "expr", "left": "valor", "right": textoRes,
-                   "valNum": valRes, "tipoDat": tipoRes,
-                   "hijos": [izq, {"top": operador}, der]}
+        if valFinal != None:
+            self.valGuardados[nomVar] = valFinal
 
-        return {"top": "expr", "left": "valor", "right": izq["right"],
-                "valNum": izq["valNum"], "tipoDat": izq["tipoDat"], "hijos": [izq]}
-
-    def armaTermino(self):
-        izq = self.armaOperando()
-
-        while self.posDer < len(self.tokDer) and (self.tokDer[self.posDer] == "*" or self.tokDer[self.posDer] == "/"):
-            operador = self.tokDer[self.posDer]
-            self.posDer = self.posDer + 1
-            der = self.armaOperando()
-
-            tipoRes = self.combinaTipo(izq["tipoDat"], der["tipoDat"])
-            valRes = None
-
-            if izq["valNum"] != None and der["valNum"] != None:
-                if operador == "*":
-                    valRes = izq["valNum"] * der["valNum"]
-                elif der["valNum"] != 0:
-                    valRes = izq["valNum"] / der["valNum"]  # division real, pero se redondea al asginar
-
-            if valRes != None:
-                textoRes = self.formatoNum(valRes)
+    def armaExpr(self, der):
+        # como en intermedio: primero una lista operando, operador, operando...
+        # luego junto * y / , despues + y - , de izq a der
+        self.expr = []
+        k = 0
+        while k < len(der):
+            if len(self.expr) % 2 == 0:
+                self.expr.append(self.armaOperando(der[k]))
+            elif self.esOper(der[k]) == 1:
+                self.expr.append(der[k])
             else:
-                textoRes = str(izq["right"]) + operador + str(der["right"])
+                break # ya no viene operador, lo demas no entra
+            k = k + 1
+        if len(self.expr) % 2 == 0:
+            self.expr.pop(len(self.expr)-1) # quedo un operador suelto al final
 
-            izq = {"top": "termino", "left": "valor", "right": textoRes,
-                   "valNum": valRes, "tipoDat": tipoRes,
-                   "hijos": [izq, {"top": operador}, der]}
+        # nivel 2, multiplicaciones y divisiones
+        i = 1
+        while i < len(self.expr):
+            if self.expr[i] == "*" or self.expr[i] == "/":
+                nodo = self.juntaTermino(self.expr[i-1], self.expr[i], self.expr[i+1])
+                self.expr.pop(i+1)
+                self.expr.pop(i)
+                self.expr[i-1] = nodo
+            else:
+                i = i + 2
 
-        return {"top": "termino", "left": "valor", "right": izq["right"],
-                "valNum": izq["valNum"], "tipoDat": izq["tipoDat"], "hijos": [izq]}
+        # cada pedazo q quedo es un termino
+        i = 0
+        while i < len(self.expr):
+            self.expr[i] = self.envuelve("termino", self.expr[i])
+            i = i + 2
 
-    def armaOperando(self):
-        tokAct = self.tokDer[self.posDer]
-        self.posDer = self.posDer + 1
-        hoja = self.armaHoja(tokAct)
-        return {"top": "operando", "left": "valor", "right": hoja["right"],
-                "valNum": hoja["valNum"], "tipoDat": hoja["tipoDat"], "hijos": [hoja]}
+        # nivel 1, sumas y restas (ya solo quedan de esas)
+        while len(self.expr) > 1:
+            nodo = self.juntaExpr(self.expr[0], self.expr[1], self.expr[2])
+            self.expr.pop(2)
+            self.expr.pop(1)
+            self.expr[0] = nodo
+
+        return self.envuelve("expr", self.expr[0])
+
+    def envuelve(self, top, nodo):
+        # el nodo de arriba nomas copia lo de su hijo
+        return {"top": top, "left": "valor", "right": nodo["right"],
+                "valNum": nodo["valNum"], "tipoDat": nodo["tipoDat"], "hijos": [nodo]}
+
+    def juntaTermino(self, izq, operador, der):
+        valRes = None
+        if izq["valNum"] != None and der["valNum"] != None:
+            if operador == "*":
+                valRes = izq["valNum"] * der["valNum"]
+            elif der["valNum"] != 0:
+                valRes = izq["valNum"] / der["valNum"]  # division real, pero se redondea al asginar
+        if valRes != None:
+            textoRes = self.formatoNum(valRes)
+        else:
+            textoRes = str(izq["right"]) + operador + str(der["right"])
+        return {"top": "termino", "left": "valor", "right": textoRes,
+                "valNum": valRes, "tipoDat": self.combinaTipo(izq["tipoDat"], der["tipoDat"]),
+                "hijos": [izq, {"top": operador}, der]}
+
+    def juntaExpr(self, izq, operador, der):
+        valRes = None
+        if izq["valNum"] != None and der["valNum"] != None:
+            if operador == "+":
+                valRes = izq["valNum"] + der["valNum"]
+            else:
+                valRes = izq["valNum"] - der["valNum"]
+            textoRes = self.formatoNum(valRes)
+        else:
+            textoRes = str(izq["right"]) + operador + str(der["right"])
+        return {"top": "expr", "left": "valor", "right": textoRes,
+                "valNum": valRes, "tipoDat": self.combinaTipo(izq["tipoDat"], der["tipoDat"]),
+                "hijos": [izq, {"top": operador}, der]}
+
+    def armaOperando(self, tokAct):
+        return self.envuelve("operando", self.armaHoja(tokAct))
 
     def armaHoja(self, tokAct):
         esNumero = 1
+        tienePunto = 0
         if len(tokAct) == 0:
             esNumero = 0
         c = 0
         while c < len(tokAct):
-            car = tokAct[c]
-            if car not in self.sinLex.num and car != '.':
+            if tokAct[c] == '.':
+                tienePunto = tienePunto + 1
+            elif tokAct[c] not in self.sinLex.num:
                 esNumero = 0
             c = c + 1
+        if tienePunto > 1 or tokAct == '.':
+            esNumero = 0 # tipo 3.4.5 , si no truena el float
 
         if esNumero == 1:
-            tienePunto = 0
-            c = 0
-            while c < len(tokAct):
-                if tokAct[c] == '.':
-                    tienePunto = 1
-                c = c + 1
-
             if tienePunto == 1:
                 valorNum = float(tokAct)
                 tipoDat = "Dec"
             else:
                 valorNum = int(tokAct)
                 tipoDat = "Ent"
-
             return {"top": "numero", "left": "valor", "right": tokAct,
-                    "valNum": valorNum, "tipoDat": tipoDat,
-                    "hijos": [{"top": tokAct}]}
+                    "valNum": valorNum, "tipoDat": tipoDat, "hijos": [{"top": tokAct}]}
 
         # si no es numero entonces es una variable
         tipoDat = "Ent"
-        c = 0
-        while c < len(self.varTipo):
-            if self.varTipo[c] == tokAct:
-                tipoDat = self.tipoVar[c]
-            c = c + 1
-
+        if self.posVar(tokAct) != -1:
+            tipoDat = self.tipoVar[self.posVar(tokAct)]
         valorNum = None
+        textoNodo = tokAct
         if tokAct in self.valGuardados:
             valorNum = self.valGuardados[tokAct]
-
-        if valorNum == None:
-            textoNodo = tokAct
-        else:
             textoNodo = self.formatoNum(valorNum)
-
         return {"top": "nomVar", "left": "valor", "right": textoNodo,
-                "valNum": valorNum, "tipoDat": tipoDat,
-                "hijos": [{"top": tokAct}]}
+                "valNum": valorNum, "tipoDat": tipoDat, "hijos": [{"top": tokAct}]}
 
     def combinaTipo(self, tipoIzq, tipoDer):
         if tipoIzq == "Dec" or tipoDer == "Dec":
@@ -1202,7 +1217,8 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         return str(valor)
 
     def textoCadena(self, idxTok):
-        # saca el contenido de la cadena cuya comilla de apertura esta en tokComp[idxTok]
+        # saca lo de adentro de la cadena q abre en tokComp[idxTok]
+        # cuento cuantas comillas hay antes en la misma linea pa saber cual cadena es
         lin = self.linComp[idxTok]
         comillas = 0
         c = 0
@@ -1210,144 +1226,90 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             if self.tokComp[c] == '"' and self.linComp[c] == lin:
                 comillas = comillas + 1
             c = c + 1
-        pos = comillas // 2
         textos = re.findall(r'"([^"]*)"', self.sinLex.lineas[lin - 1])
-        if pos < len(textos):
-            return textos[pos]
+        if comillas // 2 < len(textos):
+            return textos[comillas // 2]
         return ""
 
     def armaConcat(self, der, inicio):
-        # separa der en elementos: cadena o variable
+        # separo der en elementos: cadena o variable, los + no
         elems = []
         i = 0
         while i < len(der):
             tk = der[i]
             if tk == '"':
-                texto = self.textoCadena(inicio + i)
-                elems.append({"top": "cadena", "left": "valor", "right": texto,
+                elems.append({"top": "cadena", "left": "valor", "right": self.textoCadena(inicio + i),
                               "hijos": [{"top": '"'}, {"top": '"'}]})
                 i = i + 2
             elif tk == "+":
                 i = i + 1
             else:
-                elems.append({"top": "nomVar", "left": "valor", "right": tk,
+                # si ya se sabe lo q vale la variable pongo su valor, si no su nombre
+                valor = tk
+                if tk in self.valCad:
+                    valor = self.valCad[tk]
+                elif tk in self.valGuardados:
+                    valor = self.formatoNum(self.valGuardados[tk])
+                elems.append({"top": "nomVar", "left": "valor", "right": valor,
                               "hijos": [{"top": tk}]})
                 i = i + 1
 
         if len(elems) == 0:
-            return {"top": "concat", "left": "valor", "right": "", "hijos": []}
+            return {"top": "concat", "left": "valor", "right": "", "valCad": "", "hijos": []}
 
-        e0 = elems[0]
-        resto = elems[1:]
-
-        if len(resto) == 0:
-            hijos = [e0]
-        elif e0["top"] == "cadena":
+        # segun la gramatica de concat
+        if len(elems) == 1:
+            hijos = [elems[0]]
+        elif elems[0]["top"] == "cadena":
             # concat -> cadena + masCat
-            hijos = [e0, {"top": "+"}, self.armaMasCat(resto)]
-        elif resto[0]["top"] == "cadena" and len(resto) == 1:
+            hijos = [elems[0], {"top": "+"}, self.armaMasCat(elems[1:])]
+        elif elems[1]["top"] == "cadena" and len(elems) == 2:
             # concat -> nomVar + cadena
-            hijos = [e0, {"top": "+"}, resto[0]]
-        elif resto[0]["top"] == "cadena":
+            hijos = [elems[0], {"top": "+"}, elems[1]]
+        elif elems[1]["top"] == "cadena":
             # concat -> nomVar + cadena + masCat
-            hijos = [e0, {"top": "+"}, resto[0], {"top": "+"}, self.armaMasCat(resto[1:])]
+            hijos = [elems[0], {"top": "+"}, elems[1], {"top": "+"}, self.armaMasCat(elems[2:])]
         else:
-            hijos = [e0, {"top": "+"}, self.armaMasCat(resto)]
+            hijos = [elems[0], {"top": "+"}, self.armaMasCat(elems[1:])]
 
         textoRes = ""
+        valJunto = "" # lo mismo pero pegado, pa guardarlo
         c = 0
         while c < len(elems):
             if c > 0:
                 textoRes = textoRes + "+"
             textoRes = textoRes + elems[c]["right"]
+            valJunto = valJunto + elems[c]["right"]
             c = c + 1
 
-        return {"top": "concat", "left": "valor", "right": textoRes, "hijos": hijos}
+        return {"top": "concat", "left": "valor", "right": textoRes, "valCad": valJunto, "hijos": hijos}
 
     def armaMasCat(self, lista):
-        elem = {"top": "elemCad", "left": "valor", "right": lista[0]["right"],
-                "hijos": [lista[0]]}
-        if len(lista) == 1:
-            return {"top": "masCat", "left": "valor", "right": elem["right"], "hijos": [elem]}
-        sig = self.armaMasCat(lista[1:])
-        return {"top": "masCat", "left": "valor", "right": elem["right"] + "+" + sig["right"],
-                "hijos": [elem, {"top": "+"}, sig]}
+        # masCat -> elemCad | elemCad + masCat
+        # lo armo de atras pa delante, el ultimo es el masCat mas chiquito
+        k = len(lista) - 1
+        elem = {"top": "elemCad", "left": "valor", "right": lista[k]["right"], "hijos": [lista[k]]}
+        sig = {"top": "masCat", "left": "valor", "right": elem["right"], "hijos": [elem]}
+        k = k - 1
+        while k >= 0:
+            elem = {"top": "elemCad", "left": "valor", "right": lista[k]["right"], "hijos": [lista[k]]}
+            sig = {"top": "masCat", "left": "valor", "right": elem["right"] + "+" + sig["right"],
+                   "hijos": [elem, {"top": "+"}, sig]}
+            k = k - 1
+        return sig
 
-class Intermedio:
+class Intermedio: # codigo intermedio, ocupa las tablas del lexico igual q semantico
     def __init__(self, sinLex):
         self.sinLex = sinLex
         self.lineas = sinLex.lineas
-        self.varTipo = sinLex.varTipo
-        self.opers = []     
-
-    def tokeniza(self):
-        self.opers = []
-        n = 0
-        while n < len(self.lineas):
-            linea = self.lineas[n]
-            pos = linea.find('&&')
-            if pos != -1:
-                linea = linea[:pos]         
-            sents = linea.split(';')
-            s = 0
-            while s < len(sents):
-                sent = sents[s]
-                if '=' in sent:
-                    partes = sent.split('=', 1)
-                    nomV = partes[0].strip()
-                    der = partes[1].strip()
-                    if nomV in self.varTipo and self.esAritmetica(der) == 1:
-                        self.opers.append([n + 1, nomV, self.tokenizaOp(der)])
-                s = s + 1
-            n = n + 1
-        return self.opers
-
-    def esAritmetica(self, der):
-        if '"' in der:
-            return 0
-        if der == "True" or der == "False":
-            return 0
-        c = 0
-        while c < len(der):
-            if der[c] == '+' or der[c] == '-' or der[c] == '*' or der[c] == '/':
-                return 1
-            c = c + 1
-        return 0
-
-    def tokenizaOp(self, texto):
-        toks = []
-        i = 0
-        while i < len(texto):
-            car = texto[i]
-            if car.isspace():
-                i = i + 1
-            elif car == '+' or car == '-' or car == '*' or car == '/':
-                toks.append(car)
-                i = i + 1
-            else:
-                j = i
-                while j < len(texto) and (texto[j].isalnum() or texto[j] == '.'):
-                    j = j + 1
-                if j == i:
-                    toks.append(car)         
-                    i = i + 1
-                else:
-                    toks.append(texto[i:j])
-                    i = j
-        return toks
-    def trio(self):
-        self.lidir=[]
-        self.ope=[]
-        self.op1=[]
-        self.op2=[]
-        
-class Intermedio:
-    def __init__(self, sinLex):
-        self.sinLex = sinLex
-        self.lineas = sinLex.lineas
+        self.tokComp = sinLex.tokComp
+        self.linComp = sinLex.linComp
         self.varTipo = sinLex.varTipo
         self.opers = []
-        # operaciones de la expresion q estoy procesando (en orden de evaluacion)
+        self.limpia()
+
+    def limpia(self):
+        # operaciones de la expresion actual, en el orden q se resuelven
         self.oOpe = []
         self.oOp1 = []
         self.oOp2 = []
@@ -1356,76 +1318,52 @@ class Intermedio:
         self.cuOp1 = []
         self.cuOp2 = []
         self.cuAux = []
-        # triplos (las listas q ya tenia en trio)
+        # triplos
         self.lidir = []
         self.ope = []
         self.op1 = []
         self.op2 = []
         # codigo P
         self.codP = []
-        # notacion polaca, una fila cada vez q se saca un operador
+        # polaca, una fila cada q sale un operador
         self.polPila1 = []
         self.polPila2 = []
         self.polCad = []
 
     def tokeniza(self):
+        # busco variable = ... ; en tokComp, igual q en el semantico
         self.opers = []
-        n = 0
-        while n < len(self.lineas):
-            linea = self.lineas[n]
-            pos = linea.find('&&')
-            if pos != -1:
-                linea = linea[:pos]         
-            sents = linea.split(';')
-            s = 0
-            while s < len(sents):
-                sent = sents[s]
-                if '=' in sent:
-                    partes = sent.split('=', 1)
-                    nomV = partes[0].strip()
-                    der = partes[1].strip()
-                    if nomV in self.varTipo and self.esAritmetica(der) == 1:
-                        self.opers.append([n + 1, nomV, self.tokenizaOp(der)])
-                s = s + 1
-            n = n + 1
+        self.ind = 0
+        self.long = len(self.tokComp)
+        while self.ind < self.long:
+            tokAct = self.tokComp[self.ind]
+            if tokAct in self.varTipo and self.ind + 1 < self.long and self.tokComp[self.ind + 1] == "=":
+                nomV = tokAct
+                lin = self.linComp[self.ind]
+                self.ind = self.ind + 2
+                der = []
+                while self.ind < self.long and self.tokComp[self.ind] != ";":
+                    der.append(self.tokComp[self.ind])
+                    self.ind = self.ind + 1
+                if self.esAritmetica(der) == 1:
+                    self.opers.append([lin, nomV, der])
+            self.ind = self.ind + 1
         return self.opers
 
     def esAritmetica(self, der):
-        if '"' in der:
-            return 0
-        if der == "True" or der == "False":
-            return 0
+        # solo las q llevan operador, cadenas y True/False no
+        ban = 0
         c = 0
         while c < len(der):
-            if der[c] == '+' or der[c] == '-' or der[c] == '*' or der[c] == '/':
-                return 1
+            if der[c] == '"' or der[c] == "True" or der[c] == "False":
+                return 0
+            if self.esOper(der[c]) == 1:
+                ban = 1
             c = c + 1
-        return 0
-
-    def tokenizaOp(self, texto):
-        toks = []
-        i = 0
-        while i < len(texto):
-            car = texto[i]
-            if car.isspace():
-                i = i + 1
-            elif car == '+' or car == '-' or car == '*' or car == '/':
-                toks.append(car)
-                i = i + 1
-            else:
-                j = i
-                while j < len(texto) and (texto[j].isalnum() or texto[j] == '.'):
-                    j = j + 1
-                if j == i:
-                    toks.append(car)         
-                    i = i + 1
-                else:
-                    toks.append(texto[i:j])
-                    i = j
-        return toks
+        return ban
 
     def generaCodigo(self):
-        # aqui junto todo, cada expresion pasa por las 4 representaciones
+        self.limpia()
         self.tokeniza()
         n = 0
         while n < len(self.opers):
@@ -1435,12 +1373,12 @@ class Intermedio:
             self.armaOperaciones()
             self.cuadruplos()
             self.trio()
-            self.armaPCode()
             self.polaca()
+            self.armaPCode() # va despues de polaca pq sale de ahi
             n = n + 1
 
     def sepTablas(self):
-        # una raya entre expresion y expresion
+        # raya entre expresion y expresion
         self.cuOpe.append("---")
         self.cuOp1.append("---")
         self.cuOp2.append("---")
@@ -1464,46 +1402,42 @@ class Intermedio:
             return 2
         if oper == "+" or oper == "-":
             return 1
-        return 0   # el = va hasta abajo de la pila
+        return 0 # el = siempre abajo
 
     def esAux(self, tk):
-        # los auxiliares son v0, v1... las variables no llevan numeros asi q no se confunden
+        # auxiliares v0, v1.. las variables no llevan numero asi q no se revuelven
         if len(tk) > 1 and tk[0] == "v" and tk[1] in self.sinLex.num:
             return 1
         return 0
 
     def armaOperaciones(self):
-        # pila de operandos y pila de operadores, si el de arriba tiene prioridad
-        # mayor o igual al q llega, sale primero (asi sale de izquierda a derecha)
+        # copio la expresion y la voy resolviendo, primero * y / y luego + y -
+        # de izq a der, la q resuelvo la cambio por su auxiliar
         self.oOpe = []
         self.oOp1 = []
         self.oOp2 = []
-        self.pilaOp = []
-        self.pilaOr = []
-        i = 0
-        while i < len(self.toks):
-            tk = self.toks[i]
-            if self.esOper(tk) == 1:
-                while len(self.pilaOr) > 0 and self.prioridad(self.pilaOr[len(self.pilaOr)-1]) >= self.prioridad(tk):
-                    self.sacaOperacion()
-                self.pilaOr.append(tk)
-            else:
-                self.pilaOp.append(tk)
-            i = i + 1
-        while len(self.pilaOr) > 0:
-            self.sacaOperacion()
-        # lo unico q queda en la pila es el resultado final
-        self.resFinal = self.pilaOp[len(self.pilaOp)-1]
-
-    def sacaOperacion(self):
-        oper = self.pilaOr.pop(len(self.pilaOr)-1)
-        seg = self.pilaOp.pop(len(self.pilaOp)-1)    # el de arriba es el segundo operando
-        pri = self.pilaOp.pop(len(self.pilaOp)-1)
-        aux = "v" + str(len(self.oOpe))
-        self.oOpe.append(oper)
-        self.oOp1.append(pri)
-        self.oOp2.append(seg)
-        self.pilaOp.append(aux)    # el resultado se vuelve a meter como auxiliar
+        self.expr = []
+        c = 0
+        while c < len(self.toks):
+            self.expr.append(self.toks[c])
+            c = c + 1
+        nivel = 2
+        while nivel > 0:
+            i = 0
+            while i < len(self.expr):
+                if self.esOper(self.expr[i]) == 1 and self.prioridad(self.expr[i]) == nivel:
+                    aux = "v" + str(len(self.oOpe))
+                    self.oOpe.append(self.expr[i])
+                    self.oOp1.append(self.expr[i-1])
+                    self.oOp2.append(self.expr[i+1])
+                    self.expr.pop(i+1)
+                    self.expr.pop(i)
+                    self.expr[i-1] = aux
+                    # no avanzo i, ahi ya quedo el sig operador
+                else:
+                    i = i + 1
+            nivel = nivel - 1
+        self.resFinal = self.expr[0]
 
     def cuadruplos(self):
         c = 0
@@ -1513,7 +1447,7 @@ class Intermedio:
             self.cuOp2.append(self.oOp2[c])
             self.cuAux.append("v" + str(c))
             c = c + 1
-        # la asignacion final
+        # asignacion final
         self.cuOpe.append("=")
         self.cuOp1.append(self.resFinal)
         self.cuOp2.append("")
@@ -1533,78 +1467,68 @@ class Intermedio:
         self.op2.append(self.nomV)
 
     def aDir(self, tk):
-        # si es un auxiliar (v0) lo cambio por su direccion ([0])
+        # v0 se cambia por [0]
         if self.esAux(tk) == 1:
             return "[" + tk[1:] + "]"
         return tk
 
-    def armaPCode(self):
-        self.codP.append("lda " + self.nomV + ";")
-        c = 0
-        while c < len(self.oOpe):
-            self.cargaOperando(self.oOp1[c])
-            self.cargaOperando(self.oOp2[c])
-            if self.oOpe[c] == "+":
-                self.codP.append("adi;")
-            elif self.oOpe[c] == "-":
-                self.codP.append("sbi;")
-            elif self.oOpe[c] == "*":
-                self.codP.append("mpi;")
-            else:
-                self.codP.append("div;")
-            c = c + 1
-        self.codP.append("sto;")
-
-    def cargaOperando(self, tk):
-        # los auxiliares ya estan en la pila, solo cargo variables y constantes
-        if self.esAux(tk) == 1:
-            return
-        if tk[0] in self.sinLex.num:
-            self.codP.append("ldc " + tk + ";")
-        else:
-            self.codP.append("lod " + tk + ";")
-
     def polaca(self):
-        # pila1 = operandos, pila2 = operadores, la cadena es lo q se va sacando
-        self.pila1 = [self.nomV]     # la variable destino va hasta abajo
+        # pila1 operandos y pila2 operadores, lo q ya salio queda como # en pila1
+        # pilaTex lleva lo q vale cada cosa de pila1 ya en polaca
+        self.pila1 = [self.nomV] # la variable destino hasta abajo
+        self.pilaTex = [self.nomV]
+        self.pilaVer = [self.nomV] # esta es la q se ve en la tabla
         self.pila2 = ["="]
-        self.cadena = ""
         i = 0
         while i < len(self.toks):
             tk = self.toks[i]
             if self.esOper(tk) == 1:
-                # el = tiene prioridad 0 asi q nunca sale aqui
                 while self.prioridad(self.pila2[len(self.pila2)-1]) >= self.prioridad(tk):
                     self.sacaPolaca()
                 self.pila2.append(tk)
             else:
                 self.pila1.append(tk)
+                self.pilaTex.append(tk)
+                self.pilaVer.append(tk)
             i = i + 1
-        # al final se vacian las pilas, el = sale hasta el ultimo
+        # vacio lo q quedo, el = sale al ultimo
         while len(self.pila2) > 0:
             self.sacaPolaca()
+        self.cadena = self.pilaTex[0]
 
     def sacaPolaca(self):
-        # primero guardo como estan las pilas antes de sacar
+        # guardo como estaban las pilas antes de sacar
         self.polPila1.append(self.textoPila(self.pila1))
         self.polPila2.append(self.textoPila(self.pila2))
         oper = self.pila2.pop(len(self.pila2)-1)
-        texto = ""
-        # el operador saca sus dos operandos (el de arriba primero)
-        # el # es un resultado q ya salio antes, ese no se vuelve a escribir
-        k = 0
-        while k < 2:
-            tk = self.pila1.pop(len(self.pila1)-1)
-            if tk != "#":
-                texto = texto + tk + " "
-            k = k + 1
-        texto = texto + oper + " "
+        seg = self.pilaTex.pop(len(self.pilaTex)-1) # el de arriba es el segundo
+        pri = self.pilaTex.pop(len(self.pilaTex)-1)
+        self.pilaTex.append(pri + " " + seg + " " + oper)
+        # en la tabla va como salen de la pila, primero el de arriba
+        # asi el destino queda al final: 2 5 * x =
+        # si los dos ya eran resultados (#) van en el orden q salieron, izq a der
+        segV = self.pilaVer.pop(len(self.pilaVer)-1)
+        priV = self.pilaVer.pop(len(self.pilaVer)-1)
+        if self.pila1[len(self.pila1)-1] == "#" and self.pila1[len(self.pila1)-2] == "#":
+            self.pilaVer.append(priV + " " + segV + " " + oper)
+        else:
+            self.pilaVer.append(segV + " " + priV + " " + oper)
+        self.pila1.pop(len(self.pila1)-1)
+        self.pila1.pop(len(self.pila1)-1)
         self.pila1.append("#")
-        self.cadena = self.cadena + texto
-        self.polCad.append(self.cadena.strip())
+        # la cadena es todo lo q ya salio, en orden de abajo pa arriba
+        cad = ""
+        c = 0
+        while c < len(self.pila1):
+            if self.pila1[c] == "#":
+                if cad != "":
+                    cad = cad + " "
+                cad = cad + self.pilaVer[c]
+            c = c + 1
+        self.polCad.append(cad)
 
     def textoPila(self, pila):
-        # para mostrar la pila sin los #
+        # la pila sin los #
         texto = ""
         c = 0
         while c < len(pila):
@@ -1614,3 +1538,30 @@ class Intermedio:
                 texto = texto + pila[c]
             c = c + 1
         return texto
+
+    def armaPCode(self):
+        # sale de pilaTex (x ... =) no de la tabla, pa q no se volteen los operandos
+        partes = self.cadena.split(" ")
+        self.codP.append("lda " + partes[0] + ";")
+        c = 1
+        while c < len(partes):
+            tk = partes[c]
+            if tk == "=":
+                self.codP.append("sto;")
+            elif tk == "+":
+                self.codP.append("adi;")
+            elif tk == "-":
+                self.codP.append("sbi;")
+            elif tk == "*":
+                self.codP.append("mpi;")
+            elif tk == "/":
+                self.codP.append("div;")
+            else:
+                self.cargaOperando(tk)
+            c = c + 1
+
+    def cargaOperando(self, tk):
+        if tk[0] in self.sinLex.num:
+            self.codP.append("ldc " + tk + ";")
+        else:
+            self.codP.append("lod " + tk + ";")
