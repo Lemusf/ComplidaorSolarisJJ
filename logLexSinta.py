@@ -1565,3 +1565,505 @@ class Intermedio: # codigo intermedio, ocupa las tablas del lexico igual q seman
             self.codP.append("ldc " + tk + ";")
         else:
             self.codP.append("lod " + tk + ";")
+
+
+
+class Optimizacion: # optimizacion de las asignaciones, ocupa las tablas del lexico igual q intermedio
+    def __init__(self, sinLex):
+        self.sinLex = sinLex
+        self.lineas = sinLex.lineas
+        self.tokComp = sinLex.tokComp
+        self.linComp = sinLex.linComp
+        self.varTipo = sinLex.varTipo
+        self.tipoVar = sinLex.tipoVar
+        self.vueltas = 2 # 
+        self.maxPotencia = 5
+        # el programa partido en sentencias (copia, el tokComp no se toca)
+        self.sentLin = []
+        self.sentTok = []
+        self.sentBorrada = []
+        # cambios q se van haciendo, pa la tabla
+        self.regVuelta = []
+        self.regLinea = []
+        self.regOpt = []
+        self.regAntes = []
+        self.regDespues = []
+        self.regCodigo = [] #
+        self.regLinCod = [] # en q renglon de ese codigo quedo el cambio (-1 si se borro)
+        # codigo final
+        self.codOri = []
+        self.codOpt = []
+
+    def optimiza(self):
+     
+        self.armaSentencias()
+        self.vuelta = 1
+        while self.vuelta <= self.vueltas:
+            self.precalculoExprecionesConst()
+            self.eliminacionSecNulas()
+            self.reduccionPotencia()
+            self.propagacionCopias()
+            self.vuelta = self.vuelta + 1
+        self.armaCodigo()
+        return self.codOpt
+
+    # 
+
+    def precalculoExprecionesConst(self):
+
+        n = 0
+        while n < len(self.sentTok):
+            if self.esAsigArit(n) == 1:
+                antes = self.textoSent(n)
+                der = self.sacaDer(n)
+                cambio = 0
+
+                bloq = 0
+                i = 1
+                while i < len(der) - 1:
+                    if der[i] == "*" or der[i] == "/":
+                        sePuede = 0
+                        if bloq == 0 and self.esNumero(der[i-1]) == 1 and self.esNumero(der[i+1]) == 1:
+                            sePuede = 1
+                        if der[i] == "/" and self.esCero(der[i+1]) == 1:
+                            sePuede = 0 # entre cero no se toca
+                        elif der[i] == "/" and sePuede == 1 and self.divInexacta(der[i-1], der[i+1]) == 1:
+                            # 10 / 3 entre enteros daria decimal, solo se hace si la var es Dec
+                            # si no el semantico lo marca como decimal en Ent
+                            if self.tipoDe(self.sentTok[n][0]) != "Dec":
+                                sePuede = 0
+                        if sePuede == 1:
+                            der[i-1] = self.opera(der[i-1], der[i], der[i+1])
+                            der.pop(i+1)
+                            der.pop(i)
+                            cambio = 1
+                        else:
+                            bloq = 1
+                            i = i + 2
+                    else:
+                        bloq = 0 # + o - empieza otro termino
+                        i = i + 2
+
+        
+                ban = 1
+                while ban == 1 and len(der) >= 3:
+                    ban = 0
+                    if (der[1] == "+" or der[1] == "-") and self.esNumero(der[0]) == 1 and self.esNumero(der[2]) == 1:
+                        if der[1] == "-" and self.valorNum(der[0]) < self.valorNum(der[2]):
+                            break # daria negativo y en solaris no hay
+                        if len(der) == 3 or der[3] == "+" or der[3] == "-":
+                            der[0] = self.opera(der[0], der[1], der[2])
+                            der.pop(2)
+                            der.pop(1)
+                            cambio = 1
+                            ban = 1
+
+                if cambio == 1:
+                    # si quedo un decimal solo y la variable es Ent se redondea, igual q en semantico
+                    if len(der) == 1 and '.' in der[0] and self.tipoDe(self.sentTok[n][0]) == "Ent":
+                        der[0] = str(round(float(der[0])))
+                    self.ponDer(n, der)
+                    self.guardaCambio(n, "Precalculo de expresiones constantes", antes)
+            n = n + 1
+
+    # 
+
+    def eliminacionSecNulas(self):
+        # quita lo q no hace nada: x + 0, 0 + x, x - 0, x * 1, 1 * x, x / 1
+        # y si queda x = x ; se borra toda la sentencia
+        n = 0
+        while n < len(self.sentTok):
+            if self.esAsigArit(n) == 1:
+                antes = self.textoSent(n)
+                der = self.sacaDer(n)
+                cambio = 0
+                i = 1
+                while i < len(der) - 1:
+                    op = der[i]
+                    if (op == "*" or op == "/") and self.esUno(der[i+1]) == 1:
+                        # x * 1 , x / 1
+                        der.pop(i+1)
+                        der.pop(i)
+                        cambio = 1
+                    elif op == "*" and self.esUno(der[i-1]) == 1 and (i == 1 or der[i-2] == "+" or der[i-2] == "-"):
+                        # 1 * x , el 1 tiene q ir al inicio del termino si no a / 1 * x se rompe
+                        der.pop(i)
+                        der.pop(i-1)
+                        cambio = 1
+                    elif (op == "+" or op == "-") and self.esCero(der[i+1]) == 1 and (i + 2 >= len(der) or der[i+2] == "+" or der[i+2] == "-"):
+                        # x + 0 , x - 0 , el 0 tiene q ser todo el termino (0 * y no)
+                        der.pop(i+1)
+                        der.pop(i)
+                        cambio = 1
+                    elif op == "+" and i == 1 and self.esCero(der[0]) == 1:
+                        # 0 + x , 0 - x no pq no hay negativos
+                        der.pop(1)
+                        der.pop(0)
+                        cambio = 1
+                    else:
+                        i = i + 2
+
+                if cambio == 1:
+                    self.ponDer(n, der)
+                if len(der) == 1 and der[0] == self.sentTok[n][0]:
+                    # x = x ; no hace nada
+                    self.sentBorrada[n] = 1
+                    cambio = 1
+                if cambio == 1:
+                    self.guardaCambio(n, "Eliminacion de secuencias nulas", antes)
+            n = n + 1
+
+    # 
+
+    def reduccionPotencia(self):
+        n = 0
+        while n < len(self.sentTok):
+            if self.esAsigArit(n) == 1:
+                antes = self.textoSent(n)
+                der = self.sacaDer(n)
+                cambio = 0
+                i = 1
+                while i < len(der) - 1:
+                    if der[i] == "*":
+                        iniTerm = 0
+                        if i == 1 or der[i-2] == "+" or der[i-2] == "-":
+                            iniTerm = 1
+                        finTerm = 0
+                        if i + 2 >= len(der) or der[i+2] == "+" or der[i+2] == "-":
+                            finTerm = 1
+                        x = ""
+                        veces = 0
+                        if iniTerm == 1 and finTerm == 1:
+                            if self.cuantasVeces(der[i+1]) > 0 and self.esNumero(der[i-1]) == 0:
+                                x = der[i-1]
+                                veces = self.cuantasVeces(der[i+1])
+                            elif self.cuantasVeces(der[i-1]) > 0 and self.esNumero(der[i+1]) == 0:
+                                x = der[i+1]
+                                veces = self.cuantasVeces(der[i-1])
+                        if x != "":
+                            # si antes venia un - queda a - x - x , si no a + x + x
+                            signo = "+"
+                            if i >= 2 and der[i-2] == "-":
+                                signo = "-"
+                            suma = [x]
+                            c = 1
+                            while c < veces:
+                                suma.append(signo)
+                                suma.append(x)
+                                c = c + 1
+                            # quito x * k y meto la suma en su lugar
+                            der.pop(i+1)
+                            der.pop(i)
+                            der.pop(i-1)
+                            c = len(suma) - 1
+                            while c >= 0:
+                                der.insert(i-1, suma[c])
+                                c = c - 1
+                            cambio = 1
+                            i = i + len(suma) - 3 # me brinco lo q meti
+                    i = i + 2
+                if cambio == 1:
+                    self.ponDer(n, der)
+                    self.guardaCambio(n, "Reduccion de potencia", antes)
+            n = n + 1
+
+    #
+
+    def propagacionCopias(self):
+        self.copNom = []
+        self.copVal = []
+        n = 0
+        while n < len(self.sentTok):
+            toks = self.sentTok[n]
+            if self.sentBorrada[n] == 1:
+                n = n + 1
+                continue
+
+            if toks[0] == "Entrada" and len(toks) > 1:
+                self.quitaCopia(toks[1])
+
+            elif self.esAsig(n) == 1:
+                nomV = toks[0]
+                der = self.sacaDer(n)
+                if self.esArit(der) == 1:
+                    antes = self.textoSent(n)
+                    cambio = 0
+                    i = 0
+                    while i < len(der): # nomas operandos, los operadores van en impar
+                        pos = self.buscaCopia(der[i])
+                        if pos != -1:
+                            der[i] = self.copVal[pos]
+                            cambio = 1
+                        i = i + 2
+                    if cambio == 1:
+                        self.ponDer(n, der)
+                        self.guardaCambio(n, "Propagacion de copias", antes)
+                # nomV cambio de valor, lo q se sabia de el ya no sirve
+                self.quitaCopia(nomV)
+                if self.esArit(der) == 1 and len(der) == 1 and der[0] != nomV:
+                    self.copNom.append(nomV)
+                    self.copVal.append(der[0])
+            n = n + 1
+
+    def buscaCopia(self, tk):
+        c = 0
+        while c < len(self.copNom):
+            if self.copNom[c] == tk:
+                return c
+            c = c + 1
+        return -1
+
+    def quitaCopia(self, nomV):
+        # se quita si es la q cambio o si es el valor de otra
+        c = 0
+        while c < len(self.copNom):
+            if self.copNom[c] == nomV or self.copVal[c] == nomV:
+                self.copNom.pop(c)
+                self.copVal.pop(c)
+            else:
+                c = c + 1
+
+    # 
+
+    def armaSentencias(self):
+        # parto el tokComp en sentencias hasta el ; , Begin, End y comentarios van solos
+        # las cadenas quedan como un solo token con su texto
+        self.sentLin = []
+        self.sentTok = []
+        self.sentBorrada = []
+        self.regVuelta = []
+        self.regLinea = []
+        self.regOpt = []
+        self.regAntes = []
+        self.regDespues = []
+        self.regCodigo = []
+        self.regLinCod = []
+        ind = 0
+        largo = len(self.tokComp)
+        while ind < largo:
+            tk = self.tokComp[ind]
+            lin = self.linComp[ind]
+            if tk == "Begin" or tk == "End":
+                toks = [tk]
+                ind = ind + 1
+            elif tk == "&&":
+                # el lexico no guarda lo q va despues del &&, lo saco de la linea
+                linea = self.lineas[lin - 1]
+                toks = [linea[linea.find('&&'):].strip()]
+                ind = ind + 1
+            else:
+                toks = []
+                while ind < largo and self.tokComp[ind] != ";":
+                    if self.tokComp[ind] == '"' and ind + 1 < largo and self.tokComp[ind+1] == '"':
+                        toks.append('"' + self.textoCadena(ind) + '"')
+                        ind = ind + 2
+                    else:
+                        toks.append(self.tokComp[ind])
+                        ind = ind + 1
+                if ind < largo:
+                    toks.append(";")
+                    ind = ind + 1
+            self.sentLin.append(lin)
+            self.sentTok.append(toks)
+            self.sentBorrada.append(0)
+
+    def armaCodigo(self):
+        self.codOri = []
+        c = 0
+        while c < len(self.lineas):
+            if self.lineas[c].strip() != "":
+                self.codOri.append(self.lineas[c].rstrip())
+            c = c + 1
+        self.codOpt = self.juntaCodigo(-1)
+
+    def juntaCodigo(self, nBusca):
+        # junto las sentencias otra vez por linea, las borradas no van
+        # de paso guardo en q renglon quedo la sentencia nBusca
+        codigo = []
+        self.linEncontrada = -1
+        linAnt = -1
+        texto = ""
+        n = 0
+        while n < len(self.sentTok):
+            if self.sentBorrada[n] == 0:
+                if self.sentLin[n] != linAnt and texto != "":
+                    codigo.append(texto)
+                    texto = ""
+                if texto == "":
+                    texto = self.textoSent(n)
+                else:
+                    texto = texto + " " + self.textoSent(n)
+                if n == nBusca:
+                    self.linEncontrada = len(codigo)
+                linAnt = self.sentLin[n]
+            n = n + 1
+        if texto != "":
+            codigo.append(texto)
+        return codigo
+
+    def esAsig(self, n):
+        # var = ... ;
+        toks = self.sentTok[n]
+        if self.sentBorrada[n] == 1 or len(toks) < 3:
+            return 0
+        if toks[0] in self.varTipo and toks[1] == "=":
+            return 1
+        return 0
+
+    def esArit(self, der):
+        # sin cadenas ni booleanos
+        if len(der) == 0:
+            return 0
+        c = 0
+        while c < len(der):
+            if der[c][0] == '"' or der[c] == "True" or der[c] == "False":
+                return 0
+            c = c + 1
+        return 1
+
+    def esAsigArit(self, n):
+        if self.esAsig(n) == 1 and self.esArit(self.sacaDer(n)) == 1:
+            return 1
+        return 0
+
+    def sacaDer(self, n):
+        # lo q va despues del = sin el ; (copia pa no mover la original)
+        toks = self.sentTok[n]
+        fin = len(toks)
+        if toks[fin-1] == ";":
+            fin = fin - 1
+        der = []
+        c = 2
+        while c < fin:
+            der.append(toks[c])
+            c = c + 1
+        return der
+
+    def ponDer(self, n, der):
+        toks = self.sentTok[n]
+        nuevo = [toks[0], toks[1]]
+        c = 0
+        while c < len(der):
+            nuevo.append(der[c])
+            c = c + 1
+        if toks[len(toks)-1] == ";":
+            nuevo.append(";")
+        self.sentTok[n] = nuevo
+
+    def textoSent(self, n):
+        texto = ""
+        c = 0
+        while c < len(self.sentTok[n]):
+            if c > 0:
+                texto = texto + " "
+            texto = texto + self.sentTok[n][c]
+            c = c + 1
+        return texto
+
+    def guardaCambio(self, n, nomOpt, antes):
+        self.regVuelta.append(self.vuelta)
+        self.regLinea.append(self.sentLin[n])
+        self.regOpt.append(nomOpt)
+        self.regAntes.append(antes)
+        if self.sentBorrada[n] == 1:
+            self.regDespues.append("(se elimina)")
+        else:
+            self.regDespues.append(self.textoSent(n))
+        # foto del codigo como va quedando, pa verlo en la interfaz
+        self.regCodigo.append(self.juntaCodigo(n))
+        self.regLinCod.append(self.linEncontrada)
+
+    def tipoDe(self, nomV):
+        tipo = ""
+        c = 0
+        while c < len(self.varTipo):
+            if self.varTipo[c] == nomV:
+                tipo = self.tipoVar[c]
+            c = c + 1
+        return tipo
+
+    # 
+
+    def esNumero(self, tk):
+        if len(tk) == 0 or tk == '.':
+            return 0
+        puntos = 0
+        c = 0
+        while c < len(tk):
+            if tk[c] == '.':
+                puntos = puntos + 1
+            elif tk[c] not in self.sinLex.num:
+                return 0
+            c = c + 1
+        if puntos > 1:
+            return 0
+        return 1
+
+    def valorNum(self, tk):
+        if '.' in tk:
+            return float(tk)
+        return int(tk)
+
+    def esCero(self, tk):
+        if self.esNumero(tk) == 1 and self.valorNum(tk) == 0:
+            return 1
+        return 0
+
+    def esUno(self, tk):
+        if self.esNumero(tk) == 1 and self.valorNum(tk) == 1:
+            return 1
+        return 0
+
+    def cuantasVeces(self, tk):
+        # si es entero de 2 a maxPotencia regresa cuantas x van, si no 0
+        if self.esNumero(tk) == 0:
+            return 0
+        val = self.valorNum(tk)
+        if val != int(val) or val < 2 or val > self.maxPotencia:
+            return 0
+        return int(val)
+
+    def divInexacta(self, a, b):
+        if '.' in a or '.' in b:
+            return 0 # ya era decimal
+        if self.valorNum(a) % self.valorNum(b) != 0:
+            return 1
+        return 0
+
+    def opera(self, a, oper, b):
+        va = self.valorNum(a)
+        vb = self.valorNum(b)
+        if oper == "+":
+            res = va + vb
+        elif oper == "-":
+            res = va - vb
+        elif oper == "*":
+            res = va * vb
+        else:
+            res = va / vb
+        # es decimal si alguno lo era o si la division no dio exacta
+        esDec = 0
+        if '.' in a or '.' in b:
+            esDec = 1
+        if oper == "/" and va % vb != 0:
+            esDec = 1
+        return self.formatoNum(res, esDec)
+
+    def formatoNum(self, valor, esDec):
+        if esDec == 0:
+            return str(int(valor))
+        return str(round(float(valor), 4))
+
+    def textoCadena(self, idxTok):
+        # igual q en semantico, cuento las comillas de antes en la misma linea
+        lin = self.linComp[idxTok]
+        comillas = 0
+        c = 0
+        while c < idxTok:
+            if self.tokComp[c] == '"' and self.linComp[c] == lin:
+                comillas = comillas + 1
+            c = c + 1
+        textos = re.findall(r'"([^"]*)"', self.lineas[lin - 1])
+        if comillas // 2 < len(textos):
+            return textos[comillas // 2]
+        return ""

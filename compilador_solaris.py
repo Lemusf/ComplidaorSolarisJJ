@@ -2,7 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import io, os, tempfile, contextlib
-from logLexSinta import SinLex, Sinta, Semantico, Intermedio
+from logLexSinta import SinLex, Sinta, Semantico, Intermedio, Optimizacion
 import io, os, tempfile, contextlib, json 
 from arbol_semantico import VisorArbolSemantico, arbol_desde_dict
 ctk.set_appearance_mode("light")
@@ -24,6 +24,7 @@ COLORES_MANUALES = {
     "filaPar":         ("#F5F7FA", "#242428"),
     "filaImpar":       ("#FFFFFF", "#1E1E22"),
     "manija":          ("#C2CAD6", "#3A3A40"),
+    "resaltado":       ("#FFF1B8", "#5A4A12"),
 }
 
 GRAMATICA_OPERACION = [
@@ -134,6 +135,7 @@ class CompiladorInterfaz(ctk.CTk):
         self.arbolesSemanticos = []
         self.indiceArbolActual = 0
         self.intermedioActual = None
+        self.optimizacionActual = None
 
        
         self.after(120, self.dibujarNumerosLinea)
@@ -150,7 +152,7 @@ class CompiladorInterfaz(ctk.CTk):
 
         ctk.CTkLabel(contenido, text="⬢  COMPILADOR SOLARIS",
                      font=self.fuenteTitulo).pack(side="left")
-        ctk.CTkLabel(contenido, text="v1.0  ·  Analizador léxico y sintáctico",
+        ctk.CTkLabel(contenido, text="v1.0  ·  Léxico, sintáctico, semántico, intermedio y optimización",
                      font=self.fuenteSubtitulo,
                      text_color=("gray35", "gray60")).pack(side="left", padx=14)
 
@@ -307,7 +309,7 @@ class CompiladorInterfaz(ctk.CTk):
             ("Sintáctico",        False, self.analizarSintactico),
             ("Semántico",         False, self.analizarSemantico),
             ("Código intermedio", False, None),
-            ("Optimización",      False, None),
+            ("Optimización",      False, self.analizarOptimizacion),
             ("Código objeto",     False, None),
         ]
         fila = 1
@@ -460,6 +462,9 @@ class CompiladorInterfaz(ctk.CTk):
         self.vistaIntermedio = ctk.CTkFrame(self.areaVistas, fg_color="transparent")
         self.vistaIntermedio.grid(row=0, column=0, sticky="nsew")
 
+        self.vistaOptimizacion = ctk.CTkFrame(self.areaVistas, fg_color="transparent")
+        self.vistaOptimizacion.grid(row=0, column=0, sticky="nsew")
+
         
 
         self.construirVistaLexico(self.vistaLexico)
@@ -467,6 +472,7 @@ class CompiladorInterfaz(ctk.CTk):
         self.construirVistaSemantico(self.vistaSemantico)
         self.construirVistaRecorridoTabla(self.vistaRecorridoTabla)
         self.construirVistaIntermedio(self.vistaIntermedio)
+        self.construirVistaOptimizacion(self.vistaOptimizacion)
 
 
 
@@ -482,7 +488,7 @@ class CompiladorInterfaz(ctk.CTk):
             ("Semántico",            True,  self.mostrarVistaSemantico),
             ("Recorrido Semantico",    True, self.mostrarVistaRecorridoTabla),
             ("Código intermedio",    True,  self.mostrarVistaIntermedio),
-            ("Optimización",         False, None),
+            ("Optimización",         True,  self.mostrarVistaOptimizacion),
             ("Código objeto",        False, None),
         ]
         for nombre, activo, accion in vistas:
@@ -521,12 +527,190 @@ class CompiladorInterfaz(ctk.CTk):
 
     def mostrarVistaRecorridoTabla(self):         
         self.vistaRecorridoTabla.tkraise()   
-        self.resaltarBotonVista("Recorrido semantico")  
+        self.resaltarBotonVista("Recorrido Semantico")  
 
 
     def mostrarVistaIntermedio(self):
         self.vistaIntermedio.tkraise()
         self.resaltarBotonVista("Código intermedio")
+
+    def mostrarVistaOptimizacion(self):
+        self.poblarOptimizacion()
+        self.vistaOptimizacion.tkraise()
+        self.resaltarBotonVista("Optimización")
+
+    # Optimizacion: arriba codigo original y optimizado, abajo la tabla de cambios
+    def construirVistaOptimizacion(self, contenedor):
+        contenedor.columnconfigure(0, weight=1)
+        contenedor.columnconfigure(1, weight=1)
+        contenedor.rowconfigure(0, weight=3)
+        contenedor.rowconfigure(1, weight=2)
+
+        self.textoCodigoOriginal, _ = self.construirPanelCodigo(
+            contenedor, 0, "Código original", (12, 6))
+        self.textoCodigoOptimizado, self.etiquetaOptimizado = self.construirPanelCodigo(
+            contenedor, 1, "Código optimizado (final)", (6, 12))
+        self.indiceCambio = -1      # -1 = se ve el codigo final
+        self.mapaLineasOriginal = {}
+
+        marco = ctk.CTkFrame(contenedor, corner_radius=10)
+        marco.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=12, pady=(0, 12))
+        marco.rowconfigure(1, weight=1)
+        marco.columnconfigure(0, weight=1)
+        encabezado = ctk.CTkFrame(marco, fg_color="transparent")
+        encabezado.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+        ctk.CTkLabel(encabezado, text="Cambios aplicados (en orden)",
+                     font=self.fuenteEtiqueta).pack(side="left")
+        ctk.CTkLabel(encabezado, text="doble clic en un cambio para ver cómo quedó el código",
+                     font=self.fuenteSubtitulo,
+                     text_color=("gray45", "gray55")).pack(side="left", padx=12)
+        ctk.CTkButton(encabezado, text="Ver final", width=90, height=28,
+                      command=self.verCodigoFinal).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(encabezado, text="▶", width=36, height=28,
+                      command=lambda: self.verCambio(self.indiceCambio + 1)).pack(side="right", padx=(6, 0))
+        ctk.CTkButton(encabezado, text="◀", width=36, height=28,
+                      command=lambda: self.verCambio(self.indiceCambio - 1)).pack(side="right")
+
+        marcoTabla = ctk.CTkFrame(marco, fg_color="transparent")
+        marcoTabla.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        marcoTabla.rowconfigure(0, weight=1)
+        marcoTabla.columnconfigure(0, weight=1)
+
+        columnas = ("Vuelta", "Línea", "Optimización", "Antes", "Después")
+        self.tablaOptimizacion = ttk.Treeview(marcoTabla, columns=columnas,
+                                              show="headings", style="Solaris.Treeview")
+        anchos = [60, 60, 300, 320, 320]
+        for columna, ancho in zip(columnas, anchos):
+            self.tablaOptimizacion.heading(columna, text=columna)
+            self.tablaOptimizacion.column(columna, width=ancho, anchor="w", stretch=True)
+        barraVertical = ctk.CTkScrollbar(marcoTabla, command=self.tablaOptimizacion.yview)
+        barraHorizontal = ctk.CTkScrollbar(marcoTabla, orientation="horizontal",
+                                           command=self.tablaOptimizacion.xview)
+        self.tablaOptimizacion.configure(yscrollcommand=barraVertical.set,
+                                         xscrollcommand=barraHorizontal.set)
+        self.tablaOptimizacion.grid(row=0, column=0, sticky="nsew")
+        barraVertical.grid(row=0, column=1, sticky="ns")
+        barraHorizontal.grid(row=1, column=0, sticky="ew")
+        self.tablaOptimizacion.bind("<Double-1>", self.alDobleClicCambio)
+        self.tablaOptimizacion.bind("<Return>", self.alDobleClicCambio)
+
+    def alDobleClicCambio(self, evento):
+        # con Enter se usa la fila seleccionada, con doble clic la que esta bajo el mouse
+        if evento.keysym == "Return":
+            fila = self.tablaOptimizacion.focus()
+        else:
+            fila = self.tablaOptimizacion.identify_row(evento.y)
+        if fila:
+            self.verCambio(self.tablaOptimizacion.index(fila))
+
+    def verCambio(self, indice):
+        """Muestra el codigo como quedo justo despues del cambio indicado."""
+        optim = self.optimizacionActual
+        if optim is None or len(optim.regOpt) == 0:
+            return
+        indice = max(0, min(indice, len(optim.regOpt) - 1))
+        self.indiceCambio = indice
+
+        filas = self.tablaOptimizacion.get_children()
+        self.tablaOptimizacion.selection_set(filas[indice])
+        self.tablaOptimizacion.focus(filas[indice])
+        self.tablaOptimizacion.see(filas[indice])
+
+        self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.regCodigo[indice]))
+        self.etiquetaOptimizado.configure(
+            text=f"Código tras el cambio {indice + 1} de {len(optim.regOpt)}  ·  "
+                 f"{optim.regOpt[indice]} (vuelta {optim.regVuelta[indice]})")
+        self.resaltarLinea(self.textoCodigoOptimizado, optim.regLinCod[indice])
+        self.resaltarLinea(self.textoCodigoOriginal,
+                           self.mapaLineasOriginal.get(optim.regLinea[indice], -1))
+
+    def verCodigoFinal(self):
+        optim = self.optimizacionActual
+        self.indiceCambio = -1
+        self.tablaOptimizacion.selection_remove(self.tablaOptimizacion.selection())
+        self.etiquetaOptimizado.configure(text="Código optimizado (final)")
+        if optim is not None:
+            self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.codOpt))
+        self.resaltarLinea(self.textoCodigoOptimizado, -1)
+        self.resaltarLinea(self.textoCodigoOriginal, -1)
+
+    def resaltarLinea(self, caja, renglon):
+        """Pinta un renglon (0 = el primero) de la caja; -1 quita el resaltado."""
+        caja.tag_remove("cambio", "1.0", "end")
+        caja.tag_config("cambio", background=colorTema("resaltado"))
+        if renglon >= 0:
+            caja.tag_add("cambio", f"{renglon + 1}.0", f"{renglon + 1}.end+1c")
+            caja.see(f"{renglon + 1}.0")
+
+    def construirPanelCodigo(self, contenedorPadre, columnaGrid, titulo, padX):
+        marco = ctk.CTkFrame(contenedorPadre, corner_radius=10)
+        marco.grid(row=0, column=columnaGrid, sticky="nsew", padx=padX, pady=(0, 12))
+        marco.rowconfigure(1, weight=1)
+        marco.columnconfigure(0, weight=1)
+        etiqueta = ctk.CTkLabel(marco, text=titulo, font=self.fuenteEtiqueta, anchor="w")
+        etiqueta.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+        texto = ctk.CTkTextbox(marco, font=self.fuenteMono, wrap="none",
+                               activate_scrollbars=True, state="disabled")
+        texto.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        return texto, etiqueta
+
+    def ponerTexto(self, caja, texto):
+        caja.configure(state="normal")
+        caja.delete("1.0", "end")
+        caja.insert("end", texto)
+        caja.configure(state="disabled")
+
+    def poblarOptimizacion(self):
+        optim = self.optimizacionActual
+        self.tablaOptimizacion.delete(*self.tablaOptimizacion.get_children())
+        if optim is None:
+            aviso = ("Aún no se ha ejecutado la optimización.\n"
+                     "Vuelve al editor y pulsa el botón «Optimización».")
+            self.ponerTexto(self.textoCodigoOriginal, aviso)
+            self.ponerTexto(self.textoCodigoOptimizado, "")
+            return
+
+        # el original con sus numeros de linea reales, asi cuadra con la columna Línea
+        lineasOriginal = []
+        self.mapaLineasOriginal = {}   # numero de linea real -> renglon en la caja
+        for numero, linea in enumerate(optim.lineas, start=1):
+            if linea.strip():
+                self.mapaLineasOriginal[numero] = len(lineasOriginal)
+                lineasOriginal.append(f"{numero:>3}  {linea.rstrip()}")
+        self.ponerTexto(self.textoCodigoOriginal, "\n".join(lineasOriginal))
+        self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.codOpt))
+
+        self.tablaOptimizacion.tag_configure("par", background=colorTema("filaPar"))
+        self.tablaOptimizacion.tag_configure("impar", background=colorTema("filaImpar"))
+        for indice in range(len(optim.regOpt)):
+            etiqueta = "par" if indice % 2 == 0 else "impar"
+            self.tablaOptimizacion.insert(
+                "", "end", tags=(etiqueta,),
+                values=(optim.regVuelta[indice], optim.regLinea[indice],
+                        optim.regOpt[indice], optim.regAntes[indice],
+                        optim.regDespues[indice]))
+        self.verCodigoFinal()
+
+    def analizarOptimizacion(self):
+        try:
+            optimizacion = Optimizacion(self.analizadorLexico)
+            optimizacion.optimiza()
+        except Exception as error:
+            messagebox.showerror(
+                "Error en optimización",
+                f"El optimizador lanzó un error:\n{error}")
+            self.establecerEstado("error optimización", "#C81E1E")
+            return
+
+        self.optimizacionActual = optimizacion
+        if len(optimizacion.regOpt) == 0:
+            messagebox.showinfo(
+                "Sin cambios",
+                "No se encontró nada que optimizar; el código queda igual.")
+        self.poblarTablas()
+        self.paginaTablas.tkraise()
+        self.mostrarVistaOptimizacion()
+        self.establecerEstado("Optimización ok", "#0E9F6E")
  
     # Codigo intermedio: la vista se divide en 4 paneles
     def construirVistaIntermedio(self, contenedor):
@@ -616,6 +800,9 @@ class CompiladorInterfaz(ctk.CTk):
             self.establecerEstado("error intermedio", "#C81E1E")
             return
  
+        # la optimizacion va despues del intermedio, aunque no haya operaciones
+        self.botonesFases["Optimización"].configure(state="normal")
+
         if len(intermedio.opers) == 0:
             messagebox.showinfo(
                 "Sin operaciones",
@@ -623,10 +810,7 @@ class CompiladorInterfaz(ctk.CTk):
             return
  
         self.intermedioActual = intermedio
-        self.poblarTablas()
         self.poblarIntermedio()
-        self.paginaTablas.tkraise()
-        self.mostrarVistaIntermedio()
         self.establecerEstado("Intermedio ok", "#0E9F6E")
  
  
@@ -861,7 +1045,9 @@ class CompiladorInterfaz(ctk.CTk):
         informacion = (
             "Compilador:    Beta\n"
             "Lenguaje:      Solaris-Lang\n"
-            "Fases activas: Léxico, Sintáctico\n"
+            "Fases activas: Léxico, Sintáctico,\n"
+            "               Semántico, Intermedio,\n"
+            "               Optimización\n"
             "\n"
             "Tipos soportados:\n"
             "  Ent  - Entero\n"
@@ -920,6 +1106,9 @@ class CompiladorInterfaz(ctk.CTk):
 
         self.analizadorLexico = lexico
         self.botonesFases["Código intermedio"].configure(state="disabled")
+        self.botonesFases["Optimización"].configure(state="disabled")
+        self.intermedioActual = None
+        self.optimizacionActual = None
         # un nuevo lexico invalida el recorrido sintactico anterior
         self.recorridoSintactico = ""
         PALABRAS_ERROR = ("error", "no reconocido", "inválido", "desconocido", "carácter inválido")
@@ -991,6 +1180,7 @@ class CompiladorInterfaz(ctk.CTk):
             self.establecerEstado("errores semánticos", "#C81E1E")
             self.botonesFases["Semántico"].configure(state="disabled")
             self.botonesFases["Código intermedio"].configure(state="disabled")
+            self.botonesFases["Optimización"].configure(state="disabled")
             return
 
         # solo llegamos aqui si el analisis semantico fue limpio
@@ -1088,7 +1278,9 @@ class CompiladorInterfaz(ctk.CTk):
         self.botonesFases["Sintáctico"].configure(state="disabled")
         self.botonesFases["Semántico"].configure(state="disabled")
         self.botonesFases["Código intermedio"].configure(state="disabled")
+        self.botonesFases["Optimización"].configure(state="disabled")
         self.intermedioActual = None
+        self.optimizacionActual = None
 
 
     # Elegir el tema normaleme sera blanco
@@ -1108,7 +1300,9 @@ class CompiladorInterfaz(ctk.CTk):
         self.dibujarNumerosLinea()
 
         self.aplicarEstiloTabla()
-        for tabla in (self.tablaTokens, self.tablaSimbolos):
+        for tabla in (self.tablaTokens, self.tablaSimbolos, self.tablaPolaca,
+                      self.tablaPCode, self.tablaTriplos, self.tablaCuadruplos,
+                      self.tablaOptimizacion):
             tabla.tag_configure("par", background=colorTema("filaPar"))
             tabla.tag_configure("impar", background=colorTema("filaImpar"))
 
