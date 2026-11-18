@@ -803,14 +803,15 @@ class CompiladorInterfaz(ctk.CTk):
         # la optimizacion va despues del intermedio, aunque no haya operaciones
         self.botonesFases["Optimización"].configure(state="normal")
 
+        # se guarda aunque venga vacio, asi las tablas se limpian y no queda lo anterior
+        self.intermedioActual = intermedio
+        self.poblarIntermedio()
+
         if len(intermedio.opers) == 0:
             messagebox.showinfo(
                 "Sin operaciones",
                 "No hay expresiones aritméticas para generar código intermedio.")
             return
- 
-        self.intermedioActual = intermedio
-        self.poblarIntermedio()
         self.establecerEstado("Intermedio ok", "#0E9F6E")
  
  
@@ -1078,6 +1079,12 @@ class CompiladorInterfaz(ctk.CTk):
             self.editorCodigo.delete("1.0", "end")
             self.editorCodigo.insert("end", contenido)
             self.dibujarNumerosLinea()
+            # codigo nuevo: lo de antes ya no aplica, hay que volver a empezar por el lexico
+            self.analizadorLexico = None
+            self.botonesFases["Sintáctico"].configure(state="disabled")
+            self.limpiarResultados()
+            self.mostrarErrores([])
+            self.establecerEstado("archivo cargado", "#1A56DB")
         except Exception as error:
             messagebox.showerror("Error",
                                  f"No se pudo cargar el archivo:\n{error}")
@@ -1104,13 +1111,9 @@ class CompiladorInterfaz(ctk.CTk):
             except OSError:
                 pass
 
+        # un nuevo lexico invalida todo lo que se habia analizado antes
+        self.limpiarResultados()
         self.analizadorLexico = lexico
-        self.botonesFases["Código intermedio"].configure(state="disabled")
-        self.botonesFases["Optimización"].configure(state="disabled")
-        self.intermedioActual = None
-        self.optimizacionActual = None
-        # un nuevo lexico invalida el recorrido sintactico anterior
-        self.recorridoSintactico = ""
         PALABRAS_ERROR = ("error", "no reconocido", "inválido", "desconocido", "carácter inválido")
 
         # Solo mostrar errores
@@ -1178,6 +1181,9 @@ class CompiladorInterfaz(ctk.CTk):
         if errores:
             # hay errores: solo los mostramos, NO generamos el arbol ni se desbloquea nada
             self.establecerEstado("errores semánticos", "#C81E1E")
+            self.arbolesSemanticos = []
+            self.indiceArbolActual = 0
+            self.actualizarArbolMostrado()
             self.botonesFases["Semántico"].configure(state="disabled")
             self.botonesFases["Código intermedio"].configure(state="disabled")
             self.botonesFases["Optimización"].configure(state="disabled")
@@ -1186,6 +1192,7 @@ class CompiladorInterfaz(ctk.CTk):
         # solo llegamos aqui si el analisis semantico fue limpio
         self.arbolesSemanticos = semantico.arbolSeman()
         self.indiceArbolActual = 0
+        self.actualizarArbolMostrado()   # si no hay arboles se ve en blanco, no el anterior
 
         self.establecerEstado("Semántico ok", "#0E9F6E")
         self.botonesFases["Semántico"].configure(state="normal", command=self.analizarSemantico)
@@ -1266,6 +1273,26 @@ class CompiladorInterfaz(ctk.CTk):
 
    
 
+    def limpiarResultados(self):
+        """Borra todo lo que dejo un analisis anterior: tablas, recorrido, arbol,
+        codigo intermedio y optimizacion. Tambien bloquea las fases de despues."""
+        self.recorridoSintactico = ""
+        self.arbolesSemanticos = []
+        self.indiceArbolActual = 0
+        self.intermedioActual = None
+        self.optimizacionActual = None
+
+        for tabla in (self.tablaTokens, self.tablaSimbolos, self.tablaPolaca,
+                      self.tablaPCode, self.tablaTriplos, self.tablaCuadruplos,
+                      self.tablaOptimizacion):
+            tabla.delete(*tabla.get_children())
+        self.actualizarRecorridoSintactico()
+        self.actualizarArbolMostrado()
+        self.poblarOptimizacion()
+
+        for nombre in ("Semántico", "Código intermedio", "Optimización"):
+            self.botonesFases[nombre].configure(state="disabled")
+
     def limpiar(self):
         self.editorCodigo.delete("1.0", "end")
         self.textoErrores.configure(state="normal")
@@ -1273,14 +1300,10 @@ class CompiladorInterfaz(ctk.CTk):
         self.textoErrores.configure(state="disabled")
 
         self.analizadorLexico = None
-        self.recorridoSintactico = ""
         self.dibujarNumerosLinea()
         self.botonesFases["Sintáctico"].configure(state="disabled")
-        self.botonesFases["Semántico"].configure(state="disabled")
-        self.botonesFases["Código intermedio"].configure(state="disabled")
-        self.botonesFases["Optimización"].configure(state="disabled")
-        self.intermedioActual = None
-        self.optimizacionActual = None
+        self.limpiarResultados()
+        self.establecerEstado("listo")
 
 
     # Elegir el tema normaleme sera blanco

@@ -17,9 +17,9 @@ class SinLex:
         self.tokComp=[]
         self.numero=[] # Esta es la q uso para guarda los tokes numeros
         self.linComp=[]
-        self.tipoVar=[] # Agg para semantico tipo Dato
-        self.varTipo= [] # Agg semantico variable
-        self.linVar= [] # linea de cada variable declarada
+        self.tipoVar=[] # estas 3 las llena el semantico (tabla de variables)
+        self.varTipo= []
+        self.linVar= []
         with open(archivo, "r", encoding="utf-8") as f:
             self.lineas = f.readlines()
 
@@ -181,22 +181,7 @@ class SinLex:
         elif token in self.bol :
             return 1
         elif token in self.tipoDato :
-            linea = self.lineas[self.nLinea - 1]
-            pos = linea.find('&&')
-            if pos != -1:
-                linea = linea[:pos] # quito el comentario, si no se metia como variable
-            partes = linea.split(maxsplit=1)
-            if len(partes) < 2:
-                return 1
-            variables = partes[1].split(";")[0].split(",")
-
-            for variable in variables:
-                variable = variable.strip()
-                if variable != "":
-                    self.varTipo.append(variable)
-                    self.tipoVar.append(token)
-                    self.linVar.append(self.nLinea) # pa saber en q linea se declaro
-
+            # las variables con su tipo ya no se guardan aqui, eso lo hace el semantico
             return 1
         else:
             return 0
@@ -700,13 +685,15 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         self.repTok = sinLex.repTok
         self.numero = sinLex.numero
         self.tokComp = sinLex.tokComp
-        self.tipoVar=sinLex.tipoVar # Agg para semantico tipo Dato
-        self.varTipo= sinLex.varTipo # Agg semantico variable
+        self.tipoVar=sinLex.tipoVar # la tabla de variables se llena aqui (analiSeman)
+        self.varTipo= sinLex.varTipo # son las mismas listas del lexico pa q intermedio y optimizacion las vean
+        self.linVar = sinLex.linVar
         self.pasos = []
-        self.nomVarConVal = []
-        self.valVarConVal = []
+        self.conValor = [] # variables q ya tienen valor
+        self.valGuardados = {}
+        self.valCad = {}
 
-    # ---------------- cositas q se usan en todos lados ----------------
+    #
 
     def posVar(self, nomV):
         # posicion de la variable en varTipo (la ultima si se repite), -1 si no esta
@@ -743,14 +730,19 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         while self.ind < self.long and self.tokComp[self.ind] != ";":
             self.ind = self.ind + 1
 
-    # ---------------- revision semantica ----------------
+    # 
 
     def analiSeman(self):
         self.errSeman = []
         self.ind = 0
         self.long = len(self.tokComp)
-
-        self.checaDuplic()
+        # la tabla se arma conforme se van declarando, asi se sabe si algo se uso antes
+        self.varTipo.clear()
+        self.tipoVar.clear()
+        self.linVar.clear()
+        self.conValor = []
+        self.valGuardados = {} # lo q vale cada var si se puede saber (pa dividir entre cero)
+        self.valCad = {}
 
         # igual q en intermedio, voy sentencia por sentencia y segun como empieza
         # mando a su revision
@@ -761,9 +753,7 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             if self.tokAct == "Begin" or self.tokAct == "End" or self.tokAct == "&&":
                 self.ind = self.ind + 1
             elif self.esTipo(self.tokAct) == 1:
-                # las declaraciones ya se revisaron en checaDuplic
-                self.hastaPuntoComa()
-                self.ind = self.ind + 1
+                self.revisaDecl()
             elif self.tokAct == "Entrada":
                 self.revisaEntrada()
             elif self.tokAct == "Salida":
@@ -771,7 +761,7 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             elif self.posVar(self.tokAct) != -1:
                 self.revisaVar()
             elif self.soloLetras(self.tokAct) == 1:
-                self.errSeman.append("la variable " + self.tokAct + " no fue declarada, linea " + str(self.linAct))
+                self.errNoDeclarada(self.tokAct, "la variable " + self.tokAct + " no fue declarada, linea " + str(self.linAct))
                 self.hastaPuntoComa()
                 self.ind = self.ind + 1
             else:
@@ -779,12 +769,57 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
 
         return self.errSeman
 
+    def revisaDecl(self):
+        # Ent a , b ; se meten a la tabla con su tipo y la linea, si ya estaba es duplicada
+        tipo = self.tokAct
+        self.ind = self.ind + 1
+        while self.ind < self.long and self.tokComp[self.ind] != ";":
+            nomV = self.tokComp[self.ind]
+            if self.soloLetras(nomV) == 1:  # si el nombre esta mal ya lo marco el lexico
+                if self.posVar(nomV) != -1:
+                    self.errSeman.append("la variable " + nomV + " ya habia sido declarada antes, linea " + str(self.linComp[self.ind]))
+                else:
+                    self.varTipo.append(nomV)
+                    self.tipoVar.append(tipo)
+                    self.linVar.append(self.linComp[self.ind])
+            self.ind = self.ind + 1
+        self.ind = self.ind + 1
+
+    def errNoDeclarada(self, nomV, msg):
+        # si si se declara pero mas abajo lo digo, si no va el mensaje normal
+        linDec = self.seDeclaraDespues(nomV)
+        if linDec != -1:
+            self.errSeman.append("la variable " + nomV + " se usa antes de declararse (se declara en la linea " + str(linDec) + "), linea " + str(self.linAct))
+        else:
+            self.errSeman.append(msg)
+
+    def seDeclaraDespues(self, nomV):
+        c = self.ind
+        while c < self.long:
+            if self.esTipo(self.tokComp[c]) == 1:
+                d = c + 1
+                while d < self.long and self.tokComp[d] != ";":
+                    if self.tokComp[d] == nomV:
+                        return self.linComp[d]
+                    d = d + 1
+            c = c + 1
+        return -1
+
+    def usaVar(self, nomV):
+        # se esta leyendo nomV, tiene q tener valor antes
+        if self.posVar(nomV) != -1 and nomV not in self.conValor:
+            self.errSeman.append("la variable " + nomV + " se usa sin tener valor, linea " + str(self.linAct))
+
     def revisaEntrada(self):
-        # Entrada x = "..." ; solo reviso q x exista, lo de las comillas no se valida
+        # Entrada x = "..." ; reviso q x exista y desde aqui ya tiene valor (pero no se sabe cual)
         self.ind = self.ind + 1
         if self.ind < self.long:
             self.nomV = self.tokComp[self.ind]
             self.decVarBus(self.nomV)
+            if self.enc == 1 and self.nomV not in self.conValor:
+                self.conValor.append(self.nomV)
+            if self.nomV in self.valGuardados:
+                self.valGuardados.pop(self.nomV)
         self.hastaPuntoComa()
         self.ind = self.ind + 1
 
@@ -799,6 +834,7 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
             self.ind = self.ind + 1
             if self.ind < self.long:
                 self.decVarBus(self.tokComp[self.ind])
+                self.usaVar(self.tokComp[self.ind])
             self.ind = self.ind + 1
         elif self.ind < self.long and self.tokComp[self.ind] == "+":
             inicio = self.ind
@@ -819,91 +855,51 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         self.hastaPuntoComa()
         self.der = self.tokComp[self.inicio:self.ind]
         self.revisaAsig(self.nomV, self.tipoDest, self.der)
-        self.guardaValorSiSeSabe(self.nomV, self.der)
+        self.guardaValor(self.nomV, self.der)
+        if self.nomV not in self.conValor:
+            self.conValor.append(self.nomV)
         self.ind = self.ind + 1
 
-    def guardaValorSiSeSabe(self, nomV, der):
-        # solo me importa saber si una var vale 0 pa lo de dividir entre cero
-        if len(der) != 1:
+    def guardaValor(self, nomV, der):
+        # lo q vale nomV si se puede calcular, igual q en el arbol (asi a = 5 - 5 ya se sabe q es 0)
+        if nomV in self.valGuardados:
+            self.valGuardados.pop(nomV)
+        if len(der) == 0 or '"' in der or der[0] == "True" or der[0] == "False":
             return
-        yaEsta = -1
-        c = 0
-        while c < len(self.nomVarConVal):
-            if self.nomVarConVal[c] == nomV:
-                yaEsta = c
-            c = c + 1
-        if self.esCero(der[0]) == 1:
-            if yaEsta != -1:
-                self.valVarConVal[yaEsta] = 0
-            else:
-                self.nomVarConVal.append(nomV)
-                self.valVarConVal.append(0)
-        elif yaEsta != -1:
-            self.valVarConVal[yaEsta] = -999 # ya no vale 0
-
-    def valorVarEsCero(self, nomV):
-        c = 0
-        while c < len(self.nomVarConVal):
-            if self.nomVarConVal[c] == nomV and self.valVarConVal[c] == 0:
-                return 1
-            c = c + 1
-        return 0
-
-    def checaDuplic(self):
-        self.yaVistas = []
-        c = 0
-        while c < len(self.varTipo):
-            nomV = self.varTipo[c]
-            if nomV in self.yaVistas:
-                self.linDup = self.sinLex.linVar[c]
-                self.errSeman.append("la variable " + nomV + " ya habia sido declarada antes, linea " + str(self.linDup))
-            else:
-                self.yaVistas.append(nomV)
-            c = c + 1
+        nodo = self.armaExpr(der)
+        valor = nodo["valNum"]
+        if valor != None:
+            if self.tipoVar[self.posVar(nomV)] == "Ent":
+                valor = round(valor)
+            self.valGuardados[nomV] = valor
 
     def decVarBus(self, nomV):
         self.enc = 0
         if self.posVar(nomV) != -1:
             self.enc = 1
         if self.enc == 0:
-            self.errSeman.append("Error, variable " + nomV + " no declarada (linea " + str(self.linAct) + ")")
+            self.errNoDeclarada(nomV, "Error, variable " + nomV + " no declarada (linea " + str(self.linAct) + ")")
 
     def checaVarsConcat(self, lista):
         c = 0
         while c < len(lista):
             if lista[c] != '"' and lista[c] != '+':
                 self.decVarBus(lista[c])
+                self.usaVar(lista[c])
             c = c + 1
 
     def tipoTok(self, token):
-        # tipo de lo q venga: variable, numero o error
+        # tipo de lo q venga: variable o numero. Si el token esta mal escrito eso ya lo marco el lexico
         self.pos2 = self.posVar(token)
         if self.pos2 != -1:
+            self.usaVar(token)
             return self.tipoVar[self.pos2]
-
-        self.esNum = 1
-        self.tienePunto = 0
-        c = 0
-        while c < len(token):
-            if token[c] == '.':
-                if self.tienePunto == 1:
-                    self.esNum = 0 # dos puntos ya no es numero
-                self.tienePunto = 1
-            elif token[c] not in self.sinLex.num:
-                self.esNum = 0
-            c = c + 1
-        if self.esNum == 1 and len(token) > 0:
-            if self.tienePunto == 1:
+        if len(token) > 0 and token[0] in self.sinLex.num:
+            if '.' in token:
                 return "Dec"
             return "Ent"
-
-        self.esLetra = self.soloLetras(token)
-        if self.esLetra == 1:
-            self.errSeman.append(token + " no fue declarada y se uso en linea " + str(self.linAct))
-            return "error"
-
-        print("token raro en operacion: ", token)  # esto casi no deberia pasar pero por si las dudas
-        self.errSeman.append("token invalido " + token + " en linea " + str(self.linAct))
+        if self.soloLetras(token) == 1:
+            self.errNoDeclarada(token, token + " no fue declarada y se uso en linea " + str(self.linAct))
         return "error"
 
     def esCero(self, token):
@@ -924,6 +920,14 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
         if '"' in der:
             if tipoDest != "Sen" and tipoDest != "Sim":
                 self.errSeman.append("no se puede meter una cadena en " + nomV + " (" + tipoDest + "), linea " + str(self.linAct))
+            elif tipoDest == "Sim":
+                # Sim es de un solo caracter, los espacios de las orillas no cuentan
+                if len(der) == 2:
+                    texto = self.textoCadena(self.inicio).strip()
+                    if len(texto) != 1:
+                        self.errSeman.append(nomV + " es Sim y solo guarda un caracter, se le quiso poner \"" + texto + "\", linea " + str(self.linAct))
+                else:
+                    self.errSeman.append(nomV + " es Sim y solo guarda un caracter, no se le puede poner una concatenacion, linea " + str(self.linAct))
             self.checaVarsConcat(der)
             return
 
@@ -955,7 +959,7 @@ class Semantico: # nO LO MUEVAS DE ARCHIVO, NECESITO LAS TABLAS DE ARRIBA
                 if self.opAnt == "/" and self.esCero(tk) == 1:
                     self.errSeman.append("division entre cero en la asignacion de " + nomV + ", linea " + str(self.linAct))
                     return
-                if self.opAnt == "/" and self.valorVarEsCero(tk) == 1:
+                if self.opAnt == "/" and tk in self.valGuardados and self.valGuardados[tk] == 0:
                     self.errSeman.append("division entre " + tk + " que vale 0, en la asignacion de " + nomV + ", linea " + str(self.linAct))
                     return
                 self.tipoOp = self.tipoTok(tk)

@@ -1,21 +1,31 @@
 Begin
 Ent edad , anios ;
-Ent x , y ;
-Dec promedio ;
-Ban activo ;
-Sim nombre , ciudad ;
-Sen mensaje , saludo ;
+Ent x ;
+Ent y , total , doble , copia ;
+Dec promedio , precio ;
+Ban activo , pagado ;
+Sim inicial ;
+Sen nombre , ciudad , mensaje ;
 edad = 21 ;
-anios = 5 ;
-x = 10 ;
-y = 20 ;
-promedio = x + y / 2 * 4 - 3 ;
+precio = 99.50 ;
 activo = True ;
+pagado = False ;
+inicial = " F " ;
 nombre = " Fernanda " ;
 ciudad = " Tlaltenango " ;
-mensaje = " Hola " ;
-saludo = " Bienvenida " ;
-Entrada edad = " Escribe tu edad " ;
-Salida = " Tu edad es: " , edad ;
-Salida = nombre + " vive en " + ciudad ;
+mensaje = nombre + " vive en " + ciudad ;
+Entrada x = " Escribe x " ;
+Entrada y = " Escribe y " ;
+anios = 2 * 6 + 3 ;
+copia = x * 1 + 0 ;
+doble = copia * 2 ;
+total = doble - copia / 2 + y ;
+x = copia ;
+promedio = 8.0 / 2 * 3 + edad ;
+Salida = " Hola " ;
+Salida = " Total: " , total ;
+Salida = " Edad " + edad + " de " + nombre ;
+Salida = nombre + " dice hola " ;
 End
+&& Programa de prueba
+&& con toda la gramatica
