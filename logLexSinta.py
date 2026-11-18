@@ -1580,8 +1580,8 @@ class Optimizacion: # Optimizacion, se hace sobre las asignaciones del programa 
         self.linComp = sinLex.linComp
         self.varTipo = sinLex.varTipo
         self.tipoVar = sinLex.tipoVar
-        self.vueltas = 2 # la 2da vuelta es x si una optimizacion deja algo pa otra
-        self.maxPotencia = 5 # x * 6 ya son muchas sumas, ya no conviene
+        self.vueltas = 1000 # la 2da vuelta es x si una optimizacion deja algo pa otra
+        self.maxPotencia = 100 # x * 6 ya son muchas sumas, ya no conviene
         self.sentLin=[]
         self.sentTok=[]
         self.sentBorrada=[]
@@ -1600,11 +1600,13 @@ class Optimizacion: # Optimizacion, se hace sobre las asignaciones del programa 
         self.armaSentencias()
         self.vuelta = 1
         while self.vuelta <= self.vueltas:
-            # pa cambiar el orden nomas se mueven estas
+            antes = len(self.regOpt)
             self.precalculoExprecionesConst()
             self.eliminacionSecNulas()
             self.reduccionPotencia()
             self.propagacionCopias()
+            if len(self.regOpt) == antes:
+                break # por si las moscas
             self.vuelta += 1
         self.armaCodigo()
         return self.codOpt
@@ -1638,7 +1640,8 @@ class Optimizacion: # Optimizacion, se hace sobre las asignaciones del programa 
                 continue
             sePuede = 0
             if bloq == 0 and self.esNumero(self.der[i-1]) == 1 and self.esNumero(self.der[i+1]) == 1:
-                sePuede = 1
+                if self.esNeutro(self.der[i-1], self.der[i], self.der[i+1]) == 0:
+                    sePuede = 1
             if self.der[i] == "/" and self.esCero(self.der[i+1]) == 1:
                 sePuede = 0
             elif self.der[i] == "/" and sePuede == 1 and self.divInexacta(self.der[i-1], self.der[i+1]) == 1:
@@ -1654,6 +1657,18 @@ class Optimizacion: # Optimizacion, se hace sobre las asignaciones del programa 
                 bloq = 1
                 i += 2
 
+    def esNeutro(self, izq, oper, der):
+        # Funicion para cuando se tenga que diferenciar de precalculo 
+        if (oper == "*" or oper == "/") and self.esUno(der) == 1:
+            return 1
+        if oper == "*" and self.esUno(izq) == 1:
+            return 1
+        if (oper == "+" or oper == "-") and self.esCero(der) == 1:
+            return 1
+        if oper == "+" and self.esCero(izq) == 1:
+            return 1
+        return 0
+    
     def precalcSum(self):
         # + y - nomas desde el principio, x + 2 + 3 no se puede pq va primero x + 2
         while len(self.der) >= 3:
@@ -1662,7 +1677,9 @@ class Optimizacion: # Optimizacion, se hace sobre las asignaciones del programa 
             if self.esNumero(self.der[0]) == 0 or self.esNumero(self.der[2]) == 0:
                 return
             if self.der[1] == "-" and self.valorNum(self.der[0]) < self.valorNum(self.der[2]):
-                return # negativos no hay en solaris
+                return # sin negativos
+            if self.esNeutro(self.der[0], self.der[1], self.der[2]) == 1:
+                return # sec nulas en lugar de este
             if len(self.der) > 3 and self.der[3] != "+" and self.der[3] != "-":
                 return
             self.der[0] = self.opera(self.der[0], self.der[1], self.der[2])
