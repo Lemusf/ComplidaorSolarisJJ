@@ -571,37 +571,59 @@ class CompiladorInterfaz(ctk.CTk):
         ctk.CTkButton(encabezado, text="◀", width=36, height=28,
                       command=lambda: self.verCambio(self.indiceCambio - 1)).pack(side="right")
 
-        marcoTabla = ctk.CTkFrame(marco, fg_color="transparent")
-        marcoTabla.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        marcoTabla.rowconfigure(0, weight=1)
-        marcoTabla.columnconfigure(0, weight=1)
+        # una columna por optimizacion; la clave es el nombre que pone la clase Optimizacion
+        columnasOpt = [
+            ("Precalculo de expresiones constantes", "Precálculo de expresiones constantes"),
+            ("Eliminacion de secuencias nulas",      "Eliminación de secuencias nulas"),
+            ("Reduccion de potencia",                "Reducción de potencia"),
+            ("Propagacion de copias",                "Propagación de copias"),
+        ]
+        zonaTablas = ctk.CTkFrame(marco, fg_color="transparent")
+        zonaTablas.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        zonaTablas.rowconfigure(0, weight=1)
 
-        columnas = ("Vuelta", "Línea", "Optimización", "Antes", "Después")
-        self.tablaOptimizacion = ttk.Treeview(marcoTabla, columns=columnas,
-                                              show="headings", style="Solaris.Treeview")
-        anchos = [60, 60, 300, 320, 320]
-        for columna, ancho in zip(columnas, anchos):
-            self.tablaOptimizacion.heading(columna, text=columna)
-            self.tablaOptimizacion.column(columna, width=ancho, anchor="w", stretch=True)
-        barraVertical = ctk.CTkScrollbar(marcoTabla, command=self.tablaOptimizacion.yview)
-        barraHorizontal = ctk.CTkScrollbar(marcoTabla, orientation="horizontal",
-                                           command=self.tablaOptimizacion.xview)
-        self.tablaOptimizacion.configure(yscrollcommand=barraVertical.set,
-                                         xscrollcommand=barraHorizontal.set)
-        self.tablaOptimizacion.grid(row=0, column=0, sticky="nsew")
-        barraVertical.grid(row=0, column=1, sticky="ns")
-        barraHorizontal.grid(row=1, column=0, sticky="ew")
-        self.tablaOptimizacion.bind("<Double-1>", self.alDobleClicCambio)
-        self.tablaOptimizacion.bind("<Return>", self.alDobleClicCambio)
+        self.tablasOptimizacion = {}     # nombre de la optimizacion -> su tabla
+        self.titulosOptimizacion = {}    # nombre -> etiqueta del titulo (lleva el conteo)
+        self.filaACambio = {}            # (tabla, fila) -> numero de cambio en orden
+        self.cambioAFila = []            # numero de cambio -> (tabla, fila)
+        for col, (clave, titulo) in enumerate(columnasOpt):
+            zonaTablas.columnconfigure(col, weight=1, uniform="opt")
+            columna = ctk.CTkFrame(zonaTablas, fg_color="transparent")
+            columna.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 4, 0))
+            columna.rowconfigure(1, weight=1)
+            columna.columnconfigure(0, weight=1)
 
-    def alDobleClicCambio(self, evento):
+            etiqueta = ctk.CTkLabel(columna, text=titulo, font=self.fuenteEtiqueta, anchor="w")
+            etiqueta.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+
+            columnas = ("Vuelta", "Línea", "Antes", "Después")
+            tabla = ttk.Treeview(columna, columns=columnas,
+                                 show="headings", style="Solaris.Treeview")
+            for nombreCol, ancho in zip(columnas, [66, 60, 150, 150]):
+                tabla.heading(nombreCol, text=nombreCol)
+                tabla.column(nombreCol, width=ancho, minwidth=ancho, anchor="w", stretch=True)
+            barraVertical = ctk.CTkScrollbar(columna, command=tabla.yview)
+            barraHorizontal = ctk.CTkScrollbar(columna, orientation="horizontal",
+                                               command=tabla.xview)
+            tabla.configure(yscrollcommand=barraVertical.set,
+                            xscrollcommand=barraHorizontal.set)
+            tabla.grid(row=1, column=0, sticky="nsew")
+            barraVertical.grid(row=1, column=1, sticky="ns")
+            barraHorizontal.grid(row=2, column=0, sticky="ew")
+            tabla.bind("<Double-1>", lambda e, t=tabla: self.alDobleClicCambio(e, t))
+            tabla.bind("<Return>", lambda e, t=tabla: self.alDobleClicCambio(e, t))
+
+            self.tablasOptimizacion[clave] = tabla
+            self.titulosOptimizacion[clave] = (etiqueta, titulo)
+
+    def alDobleClicCambio(self, evento, tabla):
         # con Enter se usa la fila seleccionada, con doble clic la que esta bajo el mouse
         if evento.keysym == "Return":
-            fila = self.tablaOptimizacion.focus()
+            fila = tabla.focus()
         else:
-            fila = self.tablaOptimizacion.identify_row(evento.y)
-        if fila:
-            self.verCambio(self.tablaOptimizacion.index(fila))
+            fila = tabla.identify_row(evento.y)
+        if fila and (tabla, fila) in self.filaACambio:
+            self.verCambio(self.filaACambio[(tabla, fila)])
 
     def verCambio(self, indice):
         """Muestra el codigo como quedo justo despues del cambio indicado."""
@@ -611,10 +633,13 @@ class CompiladorInterfaz(ctk.CTk):
         indice = max(0, min(indice, len(optim.regOpt) - 1))
         self.indiceCambio = indice
 
-        filas = self.tablaOptimizacion.get_children()
-        self.tablaOptimizacion.selection_set(filas[indice])
-        self.tablaOptimizacion.focus(filas[indice])
-        self.tablaOptimizacion.see(filas[indice])
+        # el cambio se marca en la columna de su optimizacion y en las demas se quita
+        for tabla in self.tablasOptimizacion.values():
+            tabla.selection_remove(tabla.selection())
+        tabla, fila = self.cambioAFila[indice]
+        tabla.selection_set(fila)
+        tabla.focus(fila)
+        tabla.see(fila)
 
         self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.regCodigo[indice]))
         self.etiquetaOptimizado.configure(
@@ -627,7 +652,8 @@ class CompiladorInterfaz(ctk.CTk):
     def verCodigoFinal(self):
         optim = self.optimizacionActual
         self.indiceCambio = -1
-        self.tablaOptimizacion.selection_remove(self.tablaOptimizacion.selection())
+        for tabla in self.tablasOptimizacion.values():
+            tabla.selection_remove(tabla.selection())
         self.etiquetaOptimizado.configure(text="Código optimizado (final)")
         if optim is not None:
             self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.codOpt))
@@ -662,7 +688,12 @@ class CompiladorInterfaz(ctk.CTk):
 
     def poblarOptimizacion(self):
         optim = self.optimizacionActual
-        self.tablaOptimizacion.delete(*self.tablaOptimizacion.get_children())
+        for clave, tabla in self.tablasOptimizacion.items():
+            tabla.delete(*tabla.get_children())
+            etiqueta, titulo = self.titulosOptimizacion[clave]
+            etiqueta.configure(text=titulo)
+        self.filaACambio = {}
+        self.cambioAFila = []
         if optim is None:
             aviso = ("Aún no se ha ejecutado la optimización.\n"
                      "Vuelve al editor y pulsa el botón «Optimización».")
@@ -680,15 +711,26 @@ class CompiladorInterfaz(ctk.CTk):
         self.ponerTexto(self.textoCodigoOriginal, "\n".join(lineasOriginal))
         self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.codOpt))
 
-        self.tablaOptimizacion.tag_configure("par", background=colorTema("filaPar"))
-        self.tablaOptimizacion.tag_configure("impar", background=colorTema("filaImpar"))
+        # cada cambio va a la columna de su optimizacion, pero se guarda su numero en orden
+        # para que las flechas y el doble clic sigan el orden en que se aplicaron
+        for tabla in self.tablasOptimizacion.values():
+            tabla.tag_configure("par", background=colorTema("filaPar"))
+            tabla.tag_configure("impar", background=colorTema("filaImpar"))
         for indice in range(len(optim.regOpt)):
-            etiqueta = "par" if indice % 2 == 0 else "impar"
-            self.tablaOptimizacion.insert(
+            tabla = self.tablasOptimizacion.get(optim.regOpt[indice])
+            if tabla is None:
+                tabla = list(self.tablasOptimizacion.values())[0]
+            etiqueta = "par" if len(tabla.get_children()) % 2 == 0 else "impar"
+            fila = tabla.insert(
                 "", "end", tags=(etiqueta,),
                 values=(optim.regVuelta[indice], optim.regLinea[indice],
-                        optim.regOpt[indice], optim.regAntes[indice],
-                        optim.regDespues[indice]))
+                        optim.regAntes[indice], optim.regDespues[indice]))
+            self.filaACambio[(tabla, fila)] = indice
+            self.cambioAFila.append((tabla, fila))
+        # en el titulo de cada columna cuantos cambios hizo
+        for clave, tabla in self.tablasOptimizacion.items():
+            etiqueta, titulo = self.titulosOptimizacion[clave]
+            etiqueta.configure(text=f"{titulo} ({len(tabla.get_children())})")
         self.verCodigoFinal()
 
     def analizarOptimizacion(self):
@@ -1284,7 +1326,7 @@ class CompiladorInterfaz(ctk.CTk):
 
         for tabla in (self.tablaTokens, self.tablaSimbolos, self.tablaPolaca,
                       self.tablaPCode, self.tablaTriplos, self.tablaCuadruplos,
-                      self.tablaOptimizacion):
+                      *self.tablasOptimizacion.values()):
             tabla.delete(*tabla.get_children())
         self.actualizarRecorridoSintactico()
         self.actualizarArbolMostrado()
@@ -1325,7 +1367,7 @@ class CompiladorInterfaz(ctk.CTk):
         self.aplicarEstiloTabla()
         for tabla in (self.tablaTokens, self.tablaSimbolos, self.tablaPolaca,
                       self.tablaPCode, self.tablaTriplos, self.tablaCuadruplos,
-                      self.tablaOptimizacion):
+                      *self.tablasOptimizacion.values()):
             tabla.tag_configure("par", background=colorTema("filaPar"))
             tabla.tag_configure("impar", background=colorTema("filaImpar"))
 
