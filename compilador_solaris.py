@@ -1330,6 +1330,7 @@ class CompiladorInterfaz(ctk.CTk):
             tabla.tag_configure("impar", background=colorTema("filaImpar"))
 
         self.manijaErrores.configure(fg_color=colorTema("manija"))
+        self.visorSemantico.redibujar()   # el arbol tambien cambia de colores
         
 
 if __name__ == "__main__":
