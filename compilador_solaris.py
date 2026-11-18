@@ -596,12 +596,11 @@ class CompiladorInterfaz(ctk.CTk):
             etiqueta = ctk.CTkLabel(columna, text=titulo, font=self.fuenteEtiqueta, anchor="w")
             etiqueta.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
-            columnas = ("Vuelta", "Línea", "Antes", "Después")
-            tabla = ttk.Treeview(columna, columns=columnas,
-                                 show="headings", style="Solaris.Treeview")
-            for nombreCol, ancho in zip(columnas, [66, 60, 150, 150]):
-                tabla.heading(nombreCol, text=nombreCol)
-                tabla.column(nombreCol, width=ancho, minwidth=ancho, anchor="w", stretch=True)
+            # cada cambio ocupa 3 renglones (vuelta y linea / antes / despues), asi el
+            # codigo usa todo el ancho de la columna y no se corta
+            tabla = ttk.Treeview(columna, columns=("Cambio",),
+                                 show="", style="Solaris.Treeview")
+            tabla.column("Cambio", width=260, minwidth=200, anchor="w", stretch=True)
             barraVertical = ctk.CTkScrollbar(columna, command=tabla.yview)
             barraHorizontal = ctk.CTkScrollbar(columna, orientation="horizontal",
                                                command=tabla.xview)
@@ -612,9 +611,40 @@ class CompiladorInterfaz(ctk.CTk):
             barraHorizontal.grid(row=2, column=0, sticky="ew")
             tabla.bind("<Double-1>", lambda e, t=tabla: self.alDobleClicCambio(e, t))
             tabla.bind("<Return>", lambda e, t=tabla: self.alDobleClicCambio(e, t))
+            tabla.bind("<Motion>", lambda e, t=tabla: self.mostrarDetalleCambio(e, t))
+            tabla.bind("<Leave>", lambda e: self.ocultarDetalleCambio())
 
             self.tablasOptimizacion[clave] = tabla
             self.titulosOptimizacion[clave] = (etiqueta, titulo)
+        self.ventanaDetalle = None
+
+    def mostrarDetalleCambio(self, evento, tabla):
+        """Al pasar el mouse por un cambio muestra el antes y el despues completos."""
+        fila = tabla.identify_row(evento.y)
+        optim = self.optimizacionActual
+        if optim is None or not fila or (tabla, fila) not in self.filaACambio:
+            self.ocultarDetalleCambio()
+            return
+        i = self.filaACambio[(tabla, fila)]
+        texto = (f"Vuelta {optim.regVuelta[i]}  ·  Línea {optim.regLinea[i]}\n"
+                 f"Antes:    {optim.regAntes[i]}\n"
+                 f"Después:  {optim.regDespues[i]}")
+        if self.ventanaDetalle is None:
+            self.ventanaDetalle = tk.Toplevel(self)
+            self.ventanaDetalle.overrideredirect(True)
+            self.etiquetaDetalle = tk.Label(self.ventanaDetalle, justify="left",
+                                            font=FUENTE_TABLA, padx=8, pady=6,
+                                            relief="solid", borderwidth=1)
+            self.etiquetaDetalle.pack()
+        self.etiquetaDetalle.configure(text=texto, bg=colorTema("tablaFondo"),
+                                       fg=colorTema("tablaTexto"))
+        self.ventanaDetalle.geometry(f"+{evento.x_root + 16}+{evento.y_root + 14}")
+        self.ventanaDetalle.deiconify()
+        self.ventanaDetalle.lift()
+
+    def ocultarDetalleCambio(self):
+        if self.ventanaDetalle is not None:
+            self.ventanaDetalle.withdraw()
 
     def alDobleClicCambio(self, evento, tabla):
         # con Enter se usa la fila seleccionada, con doble clic la que esta bajo el mouse
@@ -636,10 +666,11 @@ class CompiladorInterfaz(ctk.CTk):
         # el cambio se marca en la columna de su optimizacion y en las demas se quita
         for tabla in self.tablasOptimizacion.values():
             tabla.selection_remove(tabla.selection())
-        tabla, fila = self.cambioAFila[indice]
-        tabla.selection_set(fila)
-        tabla.focus(fila)
-        tabla.see(fila)
+        tabla, filas = self.cambioAFila[indice]
+        tabla.selection_set(filas)
+        tabla.focus(filas[0])
+        tabla.see(filas[-1])
+        tabla.see(filas[0])
 
         self.ponerTexto(self.textoCodigoOptimizado, "\n".join(optim.regCodigo[indice]))
         self.etiquetaOptimizado.configure(
@@ -713,24 +744,37 @@ class CompiladorInterfaz(ctk.CTk):
 
         # cada cambio va a la columna de su optimizacion, pero se guarda su numero en orden
         # para que las flechas y el doble clic sigan el orden en que se aplicaron
+        cuantos = {}
         for tabla in self.tablasOptimizacion.values():
             tabla.tag_configure("par", background=colorTema("filaPar"))
-            tabla.tag_configure("impar", background=colorTema("filaImpar"))
+            # los cambios se alternan con un fondo un poco mas oscuro pa que no se revuelvan
+            tabla.tag_configure("impar", background=colorTema("tablaEncabezado"))
+            tabla.tag_configure("encabezado", font=FUENTE_TABLA_ENC)
+            tabla.tag_configure("despues", foreground="#0E9F6E")
+            cuantos[tabla] = 0
         for indice in range(len(optim.regOpt)):
             tabla = self.tablasOptimizacion.get(optim.regOpt[indice])
             if tabla is None:
                 tabla = list(self.tablasOptimizacion.values())[0]
-            etiqueta = "par" if len(tabla.get_children()) % 2 == 0 else "impar"
-            fila = tabla.insert(
-                "", "end", tags=(etiqueta,),
-                values=(optim.regVuelta[indice], optim.regLinea[indice],
-                        optim.regAntes[indice], optim.regDespues[indice]))
-            self.filaACambio[(tabla, fila)] = indice
-            self.cambioAFila.append((tabla, fila))
+            fondo = "par" if cuantos[tabla] % 2 == 0 else "impar"
+            cuantos[tabla] += 1
+            filas = [
+                tabla.insert("", "end", tags=(fondo, "encabezado"),
+                             values=(f"Vuelta {optim.regVuelta[indice]}  ·  Línea {optim.regLinea[indice]}",)),
+                tabla.insert("", "end", tags=(fondo,),
+                             values=(f"antes:   {optim.regAntes[indice]}",)),
+                tabla.insert("", "end", tags=(fondo, "despues"),
+                             values=(f"después: {optim.regDespues[indice]}",)),
+            ]
+            for fila in filas:
+                self.filaACambio[(tabla, fila)] = indice
+            self.cambioAFila.append((tabla, filas))
         # en el titulo de cada columna cuantos cambios hizo
         for clave, tabla in self.tablasOptimizacion.items():
             etiqueta, titulo = self.titulosOptimizacion[clave]
-            etiqueta.configure(text=f"{titulo} ({len(tabla.get_children())})")
+            etiqueta.configure(text=f"{titulo} ({cuantos[tabla]})")
+            tabla.xview_moveto(0)
+            tabla.yview_moveto(0)
         self.verCodigoFinal()
 
     def analizarOptimizacion(self):
